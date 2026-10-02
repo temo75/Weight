@@ -226,68 +226,67 @@ function makeScaleCrops(file){
     };img.onerror=reject;img.src=url;
   });
 }
-async function scanScalePhoto(file){
+async async function scanScalePhoto(file){
   $("scanPreview").style.display="block";$("scanResult").style.display="none";recognizedScanWeight=null;
   $("scanImage").src=URL.createObjectURL(file);
-  $("scanStatus").textContent="📖 ვკითხულობ მხოლოდ ჩარჩოში მოქცეულ რიცხვებს...";
+  $("scanStatus").textContent="📖 ვკითხულობ რიცხვს...";
   try{
     const worker=await loadOCR();
     const img=await new Promise((resolve,reject)=>{
       const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=URL.createObjectURL(file);
     });
     const W=img.naturalWidth,H=img.naturalHeight;
-    const cv=document.createElement("canvas");
-    cv.width=Math.max(1200,W*2);cv.height=Math.max(500,H*2);
-    const g=cv.getContext("2d");g.imageSmoothingEnabled=true;
-    g.drawImage(img,0,0,cv.width,cv.height);
-
-    // IMPORTANT: the camera capture is already exactly the rectangle selected
-    // by the user. Do not search the rest of the scale or combine other areas.
-    const hits=[];
-    for(const psm of [7,8,10,13]){
-      await worker.setParameters({
-        tessedit_pageseg_mode:psm,
-        tessedit_char_whitelist:"0123456789.,",
-        preserve_interword_spaces:"0"
-      });
-      const result=await worker.recognize(cv);
-      const hit=extractWeightFromResult(result);
-      if(hit)hits.push(hit);
+    const variants=[];
+    for(const threshold of [null,135,175]){
+      const cv=document.createElement("canvas");
+      cv.width=Math.max(1200,W*2);cv.height=Math.max(500,H*2);
+      const g=cv.getContext("2d",{willReadFrequently:true});
+      g.imageSmoothingEnabled=true;
+      g.drawImage(img,0,0,cv.width,cv.height);
+      const data=g.getImageData(0,0,cv.width,cv.height),d=data.data;
+      for(let i=0;i<d.length;i+=4){
+        const v=.299*d[i]+.587*d[i+1]+.114*d[i+2];
+        const n=threshold===null?v:(v>threshold?255:0);
+        d[i]=d[i+1]=d[i+2]=n;
+      }
+      g.putImageData(data,0,0);
+      variants.push(cv);
     }
     URL.revokeObjectURL(img.src);
 
+    const hits=[];
+    for(const cv of variants){
+      for(const psm of [7,13]){
+        await worker.setParameters({
+          tessedit_pageseg_mode:psm,
+          tessedit_char_whitelist:"0123456789.,",
+          preserve_interword_spaces:"0"
+        });
+        const result=await worker.recognize(cv);
+        const raw=(result.data?.text||"").replace(/,/g,".");
+        const m=raw.match(/\d{2,3}(?:\.\d{1,2})?/);
+        if(m){
+          let n=Number(m[0]);
+          if(Number.isInteger(n)&&n>=300&&n<=999)n=n/10;
+          if(n>=30&&n<=250)hits.push({n,conf:Number(result.data?.confidence)||0});
+        }
+      }
+    }
     if(!hits.length){
-      $("scanStatus").textContent="❌ ჩარჩოში რიცხვი ვერ წავიკითხე.";
+      $("scanStatus").textContent="❌ რიცხვი ვერ ამოვიცანი — გადაიღე ეკრანი მკაფიოდ.";
       return;
     }
-
-    // Read only the number found inside the rectangle. No 150kg/330lb/brand
-    // text can enter because those parts are outside the captured rectangle.
-    const normalized=hits.map(h=>normalizeScaleReading(h.n))
-      .filter(n=>Number.isFinite(n)&&n>=30&&n<=250);
-    if(!normalized.length){
-      $("scanStatus").textContent="❌ ჩარჩოში რიცხვი ვერ წავიკითხე.";
-      return;
-    }
-
-    // Prefer the most repeated reading; if OCR writes 872, normalize to 87.2.
-    const counts={};
-    normalized.forEach(n=>{
-      const k=n.toFixed(1);
-      counts[k]=(counts[k]||0)+1;
-    });
-    const best=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
-    const w=Number(best[0]);
-
+    hits.sort((a,b)=>b.conf-a.conf);
+    const w=Math.round(hits[0].n*10)/10;
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
-    $("scanStatus").textContent="✅ ჩარჩოში ამოვიცანი: "+fmt(w)+" კგ";
+    $("scanStatus").textContent="✅ ამოვიცანი: "+fmt(w)+" კგ";
     $("scanPreview").style.display="none";
     $("scanResult").style.display="none";
     $("scanImage").removeAttribute("src");
   }catch(e){
     console.error(e);
-    $("scanStatus").textContent="❌ რიცხვის ამოცნობა ვერ მოხერხდა. ჩარჩოში მხოლოდ ეკრანის რიცხვები მოაქციე.";
+    $("scanStatus").textContent="❌ ამოცნობა ვერ მოხერხდა. სცადე კიდევ ერთხელ.";
   }
 }
 let cameraStream=null,cameraTrack=null;
