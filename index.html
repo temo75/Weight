@@ -176,11 +176,18 @@ function extractWeightFromResult(result){
     if(!m)return null;
     const n=Number(m[0]),b=w.bbox||{};
     const h=Math.max(0,(b.y1||0)-(b.y0||0)),wid=Math.max(0,(b.x1||0)-(b.x0||0));
-    if(!Number.isFinite(n)||n<30||n>250||h<10)return null;
-    return {n,h,wid,conf:Number(w.confidence)||0,score:h*1.8+wid*.15+(Number(w.confidence)||0)*.04};
+    const conf=Number(w.confidence)||0;
+    if(!Number.isFinite(n)||n<30||n>250||h<18||conf<35)return null;
+    return {n,h,wid,conf,score:h*2+wid*.08+conf*.12};
   }).filter(Boolean);
   words.sort((a,b)=>b.score-a.score);
   return words[0]||null;
+}
+function normalizeScaleReading(n){
+  if(!Number.isFinite(n))return null;
+  // A digital scale displays one decimal. OCR can occasionally drop the decimal.
+  if(Number.isInteger(n)&&n>=300&&n<=999)return Math.round(n/10)/10;
+  return Math.round(n*10)/10;
 }
 function extractWeight(text){
   const cleaned=normalizeOCRNumber(text);
@@ -226,7 +233,7 @@ async function scanScalePhoto(file){
   try{
     const worker=await loadOCR(),crops=await makeScaleCrops(file),hits=[];
     for(const src of crops){
-      for(const psm of [7,8]){
+      for(const psm of [6,7,8,10,13]){
         await worker.setParameters({tessedit_pageseg_mode:psm,tessedit_char_whitelist:"0123456789.,",preserve_interword_spaces:"0"});
         const result=await worker.recognize(src);
         const hit=extractWeightFromResult(result);
@@ -234,12 +241,29 @@ async function scanScalePhoto(file){
       }
     }
     if(!hits.length){$("scanStatus").textContent="❌ დიდი ციფრები ვერ ამოვიცანი. გადაიღე ეკრანი მკაფიოდ.";return}
-    // Prefer the physically largest numeric text. The small "150kg / 330lb / 19st"
-    // print on the scale must never beat the large LCD reading.
-    hits.sort((a,b)=>b.score-a.score);
-    const best=hits[0];
-    const w=best.n;
-    if(!Number.isFinite(w)){$("scanStatus").textContent="❌ ციფრი ვერ ამოვიცანი.";return}
+    const groups={};
+    hits.forEach(h=>{
+      const w=normalizeScaleReading(h.n);
+      if(w!=null){
+        const k=w.toFixed(1);
+        if(!groups[k])groups[k]={w,count:0,score:0};
+        groups[k].count++;
+        groups[k].score+=h.score;
+      }
+    });
+    const ranked=Object.values(groups).sort((a,b)=>{
+      if(b.count!==a.count)return b.count-a.count;
+      return b.score-a.score;
+    });
+    if(!ranked.length){$("scanStatus").textContent="❌ წონა ვერ დადასტურდა.";return}
+    // Never accept a single OCR hallucination. The LCD reading must repeat
+    // across multiple OCR passes/crops before it is inserted.
+    const best=ranked[0];
+    if(best.count<2 && ranked.length>1){
+      $("scanStatus").textContent="❌ წონა მკაფიოდ ვერ დადასტურდა — გადაიღე ეკრანი პირდაპირ და ახლოდან.";return;
+    }
+    const w=best.w;
+    if(!Number.isFinite(w)||w<30||w>250){$("scanStatus").textContent="❌ წონა ვერ დადასტურდა.";return}
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
     $("scanStatus").textContent="✅ ამოვიცანი: "+fmt(w)+" კგ";
