@@ -35,7 +35,6 @@
   <div class="section-head"><div><div class="title">📸 სასწორის ფოტო</div><div class="muted">გადაუღე ფოტო სასწორს და ციფრს ავტომატურად ამოვიცნობ</div></div></div>
   <div class="scan-actions">
     <button class="btn" id="cameraBtn">📷 ფოტოს გადაღება</button>
-    <button class="btn secondary" id="galleryBtn">🖼️ გალერეიდან</button>
   </div>
   <input id="scalePhoto" type="file" accept="image/*" capture="environment" hidden>
   <div class="scan-preview" id="scanPreview"><img id="scanImage" alt="სასწორის ფოტო"></div>
@@ -180,7 +179,6 @@ async function scanScalePhoto(file){
   }catch(e){console.error(e);$("scanStatus").textContent="❌ ფოტოს ამოცნობა ვერ მოხერხდა. სცადე კიდევ ერთხელ."}
 }
 $("cameraBtn").onclick=()=>{const i=$("scalePhoto");i.setAttribute("capture","environment");i.click()};
-$("galleryBtn").onclick=()=>{$("scalePhoto").removeAttribute("capture");$("scalePhoto").click()};
 $("scalePhoto").onchange=e=>{const file=e.target.files?.[0];if(file)scanScalePhoto(file);e.target.value=""};
 $("useScanBtn").onclick=()=>{if(!recognizedScanWeight)return;$("weightInput").value=fmt(recognizedScanWeight);document.querySelector('section.card:nth-of-type(2)')?.scrollIntoView({behavior:"smooth",block:"center"});$("weightInput").focus()};
 
