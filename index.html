@@ -229,64 +229,70 @@ function makeScaleCrops(file){
 async function scanScalePhoto(file){
   $("scanPreview").style.display="block";$("scanResult").style.display="none";recognizedScanWeight=null;
   $("scanImage").src=URL.createObjectURL(file);
-  $("scanStatus").textContent="📖 ვკითხულობ რიცხვს...";
+  $("scanStatus").textContent="📖 ვკითხულობ ჩარჩოში არსებულ რიცხვს...";
   try{
     const worker=await loadOCR();
     const img=await new Promise((resolve,reject)=>{
       const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=URL.createObjectURL(file);
     });
     const W=img.naturalWidth,H=img.naturalHeight;
-    const variants=[];
-    for(const threshold of [null,135,175]){
+    // The captured file is already the rectangle. Read its central LCD area only.
+    const crops=[];
+    for(const box of [[.08,.08,.84,.76],[.15,.12,.70,.68]]){
+      const [x,y,w,h]=box,sw=Math.round(W*w),sh=Math.round(H*h);
       const cv=document.createElement("canvas");
-      cv.width=Math.max(1200,W*2);cv.height=Math.max(500,H*2);
+      cv.width=Math.max(1000,sw*3);cv.height=Math.max(360,sh*3);
       const g=cv.getContext("2d",{willReadFrequently:true});
       g.imageSmoothingEnabled=true;
-      g.drawImage(img,0,0,cv.width,cv.height);
-      const data=g.getImageData(0,0,cv.width,cv.height),d=data.data;
-      for(let i=0;i<d.length;i+=4){
-        const v=.299*d[i]+.587*d[i+1]+.114*d[i+2];
-        const n=threshold===null?v:(v>threshold?255:0);
-        d[i]=d[i+1]=d[i+2]=n;
-      }
-      g.putImageData(data,0,0);
-      variants.push(cv);
+      g.drawImage(img,Math.round(W*x),Math.round(H*y),sw,sh,0,0,cv.width,cv.height);
+      crops.push(cv);
     }
     URL.revokeObjectURL(img.src);
 
-    const hits=[];
-    for(const cv of variants){
+    const values=[];
+    for(const cv of crops){
       for(const psm of [7,13]){
         await worker.setParameters({
           tessedit_pageseg_mode:psm,
           tessedit_char_whitelist:"0123456789.,",
-          preserve_interword_spaces:"0"
+          preserve_interword_spaces:"0",
+          user_defined_dpi:"300",
+          classify_bln_numeric_mode:"1"
         });
         const result=await worker.recognize(cv);
-        const raw=(result.data?.text||"").replace(/,/g,".");
-        const m=raw.match(/\d{2,3}(?:\.\d{1,2})?/);
-        if(m){
-          let n=Number(m[0]);
-          if(Number.isInteger(n)&&n>=300&&n<=999)n=n/10;
-          if(n>=30&&n<=250)hits.push({n,conf:Number(result.data?.confidence)||0});
+        const raw=(result.data?.text||"").replace(/\s+/g,"").replace(/,/g,".");
+        const exact=raw.match(/\d{2,3}\.\d/);
+        const packed=raw.match(/\d{3}/);
+        let n=null;
+        if(exact)n=Number(exact[0]);
+        else if(packed){
+          const p=Number(packed[0]);
+          if(p>=300&&p<=999)n=p/10;
+        }else{
+          const m=raw.match(/\d{2,3}(?:\.\d{1,2})?/);
+          if(m)n=Number(m[0]);
+        }
+        if(Number.isFinite(n)&&n>=30&&n<=250){
+          values.push({n:Math.round(n*10)/10,conf:Number(result.data?.confidence)||0});
         }
       }
     }
-    if(!hits.length){
-      $("scanStatus").textContent="❌ რიცხვი ვერ ამოვიცანი — გადაიღე ეკრანი მკაფიოდ.";
+    if(!values.length){
+      $("scanStatus").textContent="❌ რიცხვი ვერ ამოვიცანი — გადაიღე მხოლოდ ეკრანი ჩარჩოში.";
       return;
     }
-    hits.sort((a,b)=>b.conf-a.conf);
-    const w=Math.round(hits[0].n*10)/10;
+    // Prefer the strongest OCR result, but only from the LCD crop.
+    values.sort((a,b)=>b.conf-a.conf);
+    const w=values[0].n;
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
-    $("scanStatus").textContent="✅ ამოვიცანი: "+fmt(w)+" კგ";
+    $("scanStatus").textContent="✅ ამოვიცანი ზუსტად: "+fmt(w)+" კგ";
     $("scanPreview").style.display="none";
     $("scanResult").style.display="none";
     $("scanImage").removeAttribute("src");
   }catch(e){
     console.error(e);
-    $("scanStatus").textContent="❌ ამოცნობა ვერ მოხერხდა. სცადე კიდევ ერთხელ.";
+    $("scanStatus").textContent="❌ რიცხვის ამოცნობა ვერ მოხერხდა.";
   }
 }
 let cameraStream=null,cameraTrack=null;
