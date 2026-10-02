@@ -291,26 +291,26 @@ async async function scanScalePhoto(file){
 }
 let cameraStream=null,cameraTrack=null;
 async function openCamera(){
-  const modal=$("cameraModal"),video=$("cameraVideo"),input=$("scalePhoto");
-  const fallback=()=>{
-    if(cameraStream)cameraStream.getTracks().forEach(t=>t.stop());
-    cameraStream=null;cameraTrack=null;
-    input.setAttribute("capture","environment");
-    input.click();
-  };
+  const modal=$("cameraModal"),video=$("cameraVideo");
   try{
-    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){fallback();return}
-    $("scanStatus").textContent="📷 კამერა იტვირთება...";
-    const request=navigator.mediaDevices.getUserMedia({
-      video:{facingMode:{ideal:"environment"},width:{ideal:1280},height:{ideal:960}},
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+      $("scanStatus").textContent="❌ ამ ბრაუზერში კამერა მიუწვდომელია.";
+      return;
+    }
+    $("scanStatus").textContent="📷 კამერის გახსნა...";
+    // Do not use a timeout here: Android may need a few seconds for the
+    // permission dialog. Timing out loses the original user gesture.
+    cameraStream=await navigator.mediaDevices.getUserMedia({
+      video:{
+        facingMode:{ideal:"environment"},
+        width:{ideal:1280},
+        height:{ideal:960}
+      },
       audio:false
     });
-    cameraStream=await Promise.race([
-      request,
-      new Promise((_,reject)=>setTimeout(()=>reject(new Error("camera-timeout")),4000))
-    ]);
     video.srcObject=cameraStream;
     cameraTrack=cameraStream.getVideoTracks()[0];
+
     const caps=cameraTrack.getCapabilities?cameraTrack.getCapabilities():{};
     const zoom=$("zoomControl"),zv=$("zoomValue");
     if(caps.zoom){
@@ -326,8 +326,10 @@ async function openCamera(){
     modal.style.display="flex";
     $("scanStatus").textContent="";
   }catch(e){
-    console.error(e);
-    fallback();
+    console.error("Camera error:",e);
+    if(cameraStream)cameraStream.getTracks().forEach(t=>t.stop());
+    cameraStream=null;cameraTrack=null;
+    $("scanStatus").textContent="❌ კამერის უფლება არ არის მიცემული ან კამერა დაკავებულია.";
   }
 }
 function closeCamera(){
