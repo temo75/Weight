@@ -37,6 +37,20 @@
     <button class="btn" id="cameraBtn">📷 ფოტოს გადაღება</button>
   </div>
   <input id="scalePhoto" type="file" accept="image/*" capture="environment" hidden>
+<div class="camera-modal" id="cameraModal">
+  <div class="camera-box">
+    <div class="camera-stage">
+      <video id="cameraVideo" autoplay playsinline muted></video>
+      <div class="focus-frame"></div>
+      <div class="focus-label">მოათავსე დიდი ციფრები ჩარჩოში</div>
+    </div>
+    <div class="zoom-row"><span>🔍</span><input id="zoomControl" type="range" min="1" max="1" step="0.1" value="1"><span id="zoomValue">1×</span></div>
+    <div class="camera-actions">
+      <button class="btn camera-close" id="closeCameraBtn">✕ დახურვა</button>
+      <button class="btn" id="captureCameraBtn">📸 გადაღება</button>
+    </div>
+  </div>
+</div>
   <div class="scan-preview" id="scanPreview"><img id="scanImage" alt="სასწორის ფოტო"></div>
   <div class="scan-status" id="scanStatus"></div>
   <div class="scan-result" id="scanResult"><div>ამოვიცანი</div><strong id="recognizedWeight">—</strong></div>
@@ -216,7 +230,42 @@ async function scanScalePhoto(file){
     $("scanImage").removeAttribute("src");
   }catch(e){console.error(e);$("scanStatus").textContent="❌ ფოტოს ამოცნობა ვერ მოხერხდა. სცადე ეკრანი უფრო ახლოდან გადაიღო."}
 }
-$("cameraBtn").onclick=()=>{const i=$("scalePhoto");i.setAttribute("capture","environment");i.click()};
+let cameraStream=null,cameraTrack=null;
+async function openCamera(){
+  try{
+    const modal=$("cameraModal"),video=$("cameraVideo");
+    cameraStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}},audio:false});
+    video.srcObject=cameraStream;
+    cameraTrack=cameraStream.getVideoTracks()[0];
+    const caps=cameraTrack.getCapabilities?cameraTrack.getCapabilities():{};
+    const zoom=$("zoomControl"),zv=$("zoomValue");
+    if(caps.zoom){
+      zoom.min=caps.zoom.min||1;zoom.max=caps.zoom.max||1;zoom.step=caps.zoom.step||0.1;zoom.value=Math.max(caps.zoom.min||1,Math.min(caps.zoom.max||1,caps.zoom.min||1));zoom.disabled=false;
+    }else{zoom.min=1;zoom.max=1;zoom.value=1;zoom.disabled=true}
+    zv.textContent=Number(zoom.value).toFixed(1).replace(".0","")+"×";
+    modal.style.display="flex";
+  }catch(e){console.error(e);$("scanStatus").textContent="❌ კამერის გახსნა ვერ მოხერხდა. მიეცი საიტს კამერის უფლება.";const i=$("scalePhoto");i.setAttribute("capture","environment");i.click()}
+}
+function closeCamera(){
+  if(cameraStream)cameraStream.getTracks().forEach(t=>t.stop());
+  cameraStream=null;cameraTrack=null;$("cameraVideo").srcObject=null;$("cameraModal").style.display="none";
+}
+$("cameraBtn").onclick=openCamera;
+$("closeCameraBtn").onclick=closeCamera;
+$("zoomControl").oninput=async e=>{
+  const z=Number(e.target.value);$("zoomValue").textContent=z.toFixed(1).replace(".0","")+"×";
+  if(cameraTrack&&cameraTrack.applyConstraints)try{await cameraTrack.applyConstraints({advanced:[{zoom:z}]})}catch(_){}
+};
+$("captureCameraBtn").onclick=()=>{
+  const video=$("cameraVideo"),stage=document.querySelector(".camera-stage"),frame=document.querySelector(".focus-frame");
+  if(!video.videoWidth)return;
+  const sr=stage.getBoundingClientRect(),fr=frame.getBoundingClientRect();
+  const sx=(fr.left-sr.left)/sr.width*video.videoWidth,sy=(fr.top-sr.top)/sr.height*video.videoHeight;
+  const sw=fr.width/sr.width*video.videoWidth,sh=fr.height/sr.height*video.videoHeight;
+  const cv=document.createElement("canvas");cv.width=Math.round(sw*1.8);cv.height=Math.round(sh*1.8);
+  cv.getContext("2d").drawImage(video,sx,sy,sw,sh,0,0,cv.width,cv.height);
+  cv.toBlob(blob=>{closeCamera();scanScalePhoto(blob)},"image/jpeg",.95);
+};
 $("scalePhoto").onchange=e=>{const file=e.target.files?.[0];if(file)scanScalePhoto(file);e.target.value=""};
 
 $("saveBtn").onclick=()=>{const w=Number($("weightInput").value);if(!w||w<=0||w>500){$("weightInput").focus();return}const d=today(),r=records.find(x=>x.date===d);if(r)r.weight=w;else records.push({date:d,weight:w});records.sort((a,b)=>a.date.localeCompare(b.date));saveAll();$("weightInput").value="";render()};
