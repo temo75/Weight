@@ -81,14 +81,14 @@
 
 <script>
 const KEY="temo_weight_v2",SET="temo_weight_settings_v1";
-let records=JSON.parse(localStorage.getItem(KEY)||"[]").filter(x=>x&&x.date&&Number(x.weight)>0).sort((a,b)=>a.date.localeCompare(b.date));
+let records=JSON.parse(localStorage.getItem(KEY)||localStorage.getItem("temo_weight_v1")||"[]").filter(x=>x&&x.date&&Number(x.weight)>0).sort((a,b)=>a.date.localeCompare(b.date));
 let settings=JSON.parse(localStorage.getItem(SET)||"{}"),range="all";
 const $=id=>document.getElementById(id);
 const today=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
 const dateText=s=>new Date(s+"T12:00:00").toLocaleDateString("ka-GE",{day:"2-digit",month:"long",year:"numeric"});
 const fmt=n=>Number(n).toFixed(1);
 const signed=n=>Math.abs(n)<.0001?"0.0 კგ":(n>0?"+":"")+fmt(n)+" კგ";
-function saveAll(){localStorage.setItem(KEY,JSON.stringify(records));localStorage.setItem(SET,JSON.stringify(settings))}
+function saveAll(){localStorage.setItem(KEY,JSON.stringify(records));localStorage.setItem("temo_weight_v1",JSON.stringify(records));localStorage.setItem(SET,JSON.stringify(settings))}
 function setChange(el,n){el.textContent=n===null?"—":signed(n);el.className="value "+(n===null?"":n<0?"green":n>0?"red":"")}
 function streakCount(){if(!records.length)return 0;let n=0,d=new Date();d.setHours(12,0,0,0);for(;;){const s=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");if(records.some(r=>r.date===s)){n++;d.setDate(d.getDate()-1)}else break}return n}
 function goalProgress(cur){if(!settings.goal||!records.length)return 0;const start=+records[0].weight,g=+settings.goal;if(start===g)return 100;let p=((start-cur)/(start-g))*100;return Math.max(0,Math.min(100,p))}
