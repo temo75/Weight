@@ -39,7 +39,7 @@
   <input id="scalePhoto" type="file" accept="image/*" capture="environment" hidden>
   <div class="scan-preview" id="scanPreview"><img id="scanImage" alt="სასწორის ფოტო"></div>
   <div class="scan-status" id="scanStatus"></div>
-  <div class="scan-result" id="scanResult"><div>ამოვიცანი</div><strong id="recognizedWeight">—</strong><div class="muted">თუ სწორია, დააჭირე შენახვას</div><button class="btn" id="useScanBtn">✅ ამ წონის გამოყენება</button></div>
+  <div class="scan-result" id="scanResult"><div>ამოვიცანი</div><strong id="recognizedWeight">—</strong></div>
 </section>
 
 <section class="card">
@@ -153,15 +153,13 @@ async function loadOCR(){
   return ocrWorker;
 }
 function extractWeight(text){
-  const cleaned=text.replace(/,/g,".");
-  const nums=cleaned.match(/\d{1,3}(?:\.\d{1,2})?/g)||[];
-  const candidates=nums.map(Number).filter(n=>n>=20&&n<=300);
-  if(!candidates.length)return null;
-  candidates.sort((a,b)=>{
-    const da=Math.abs(a-70),db=Math.abs(b-70);
-    return da-db;
-  });
-  return candidates[0];
+  const cleaned=text.replace(/,/g,".").replace(/[Oo]/g,"0").replace(/[Il|]/g,"1");
+  const decimalMatches=cleaned.match(/\d{2,3}\.\d{1,2}/g)||[];
+  const decimals=decimalMatches.map(Number).filter(n=>n>=30&&n<=250);
+  if(decimals.length)return decimals[0];
+  const nums=cleaned.match(/\d{2,3}/g)||[];
+  const candidates=nums.map(Number).filter(n=>n>=30&&n<=250);
+  return candidates.length?candidates[0]:null;
 }
 async function scanScalePhoto(file){
   $("scanPreview").style.display="block";$("scanResult").style.display="none";recognizedScanWeight=null;
@@ -173,14 +171,15 @@ async function scanScalePhoto(file){
     const w=extractWeight(result.data.text);
     if(!w){$("scanStatus").textContent="❌ ციფრი ვერ ამოვიცანი. გადაიღე ეკრანი უფრო ახლოდან და მკაფიოდ.";return}
     recognizedScanWeight=w;
-    $("recognizedWeight").textContent=fmt(w)+" კგ";
-    $("scanResult").style.display="block";
-    $("scanStatus").textContent="✅ წონა ამოვიცანი";
+    $("weightInput").value=fmt(w);
+    $("scanStatus").textContent="✅ ამოვიცანი: "+fmt(w)+" კგ";
+    $("scanPreview").style.display="none";
+    $("scanResult").style.display="none";
+    $("scanImage").removeAttribute("src");
   }catch(e){console.error(e);$("scanStatus").textContent="❌ ფოტოს ამოცნობა ვერ მოხერხდა. სცადე კიდევ ერთხელ."}
 }
 $("cameraBtn").onclick=()=>{const i=$("scalePhoto");i.setAttribute("capture","environment");i.click()};
 $("scalePhoto").onchange=e=>{const file=e.target.files?.[0];if(file)scanScalePhoto(file);e.target.value=""};
-$("useScanBtn").onclick=()=>{if(!recognizedScanWeight)return;$("weightInput").value=fmt(recognizedScanWeight);document.querySelector('section.card:nth-of-type(2)')?.scrollIntoView({behavior:"smooth",block:"center"});$("weightInput").focus()};
 
 $("saveBtn").onclick=()=>{const w=Number($("weightInput").value);if(!w||w<=0||w>500){$("weightInput").focus();return}const d=today(),r=records.find(x=>x.date===d);if(r)r.weight=w;else records.push({date:d,weight:w});records.sort((a,b)=>a.date.localeCompare(b.date));saveAll();$("weightInput").value="";render()};
 $("settingsBtn").onclick=()=>{const g=Number($("goalInput").value),h=Number($("heightInput").value);settings.goal=g>0?g:null;settings.height=h>=100?h:null;saveAll();render()};
