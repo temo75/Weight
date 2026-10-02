@@ -32,7 +32,7 @@
 </section>
 
 <section class="card photo-scan">
-  <div class="section-head"><div><div class="title">📸 სასწორის ფოტო</div><div class="muted">გადაუღე ფოტო სასწორს და ციფრს ავტომატურად ამოვიცნობ</div></div></div>
+  <div class="section-head"><div><div class="title">📸 სასწორის ფოტო</div><div class="muted">ეკრანი მოაქციე ფოტოს ცენტრში — მხოლოდ წონის ციფრს წავიკითხავ</div></div></div>
   <div class="scan-actions">
     <button class="btn" id="cameraBtn">📷 ფოტოს გადაღება</button>
   </div>
@@ -154,29 +154,67 @@ async function loadOCR(){
 }
 function extractWeight(text){
   const cleaned=text.replace(/,/g,".").replace(/[Oo]/g,"0").replace(/[Il|]/g,"1");
-  const decimalMatches=cleaned.match(/\d{2,3}\.\d{1,2}/g)||[];
-  const decimals=decimalMatches.map(Number).filter(n=>n>=30&&n<=250);
-  if(decimals.length)return decimals[0];
-  const nums=cleaned.match(/\d{2,3}/g)||[];
-  const candidates=nums.map(Number).filter(n=>n>=30&&n<=250);
+  const matches=cleaned.match(/\d{2,3}(?:\.\d{1,2})?/g)||[];
+  const candidates=matches.map(Number).filter(n=>n>=30&&n<=250);
   return candidates.length?candidates[0]:null;
+}
+function makeScaleCrops(file){
+  return new Promise((resolve,reject)=>{
+    const img=new Image(),url=URL.createObjectURL(file);
+    img.onload=()=>{
+      const W=img.naturalWidth,H=img.naturalHeight;
+      const crops=[];
+      // The scale display is normally near the center of the photo. Crop aggressively
+      // so branding/specification text on the scale cannot become the recognized weight.
+      const boxes=[
+        [0.25,0.28,0.50,0.44],
+        [0.30,0.34,0.40,0.32],
+        [0.20,0.20,0.60,0.60]
+      ];
+      boxes.forEach(([x,y,w,h])=>{
+        const sw=Math.max(1,Math.round(W*w)),sh=Math.max(1,Math.round(H*h));
+        const cv=document.createElement("canvas");cv.width=sw*2;cv.height=sh*2;
+        const g=cv.getContext("2d");g.imageSmoothingEnabled=true;
+        g.drawImage(img,Math.round(W*x),Math.round(H*y),sw,sh,0,0,sw*2,sh*2);
+        const im=g.getImageData(0,0,cv.width,cv.height),d=im.data;
+        for(let i=0;i<d.length;i+=4){
+          const v=(d[i]*.299+d[i+1]*.587+d[i+2]*.114);
+          const n=v>150?255:0;
+          d[i]=d[i+1]=d[i+2]=n;
+        }
+        g.putImageData(im,0,0);
+        crops.push(cv.toDataURL("image/png"));
+      });
+      URL.revokeObjectURL(url);resolve(crops);
+    };img.onerror=reject;img.src=url;
+  });
 }
 async function scanScalePhoto(file){
   $("scanPreview").style.display="block";$("scanResult").style.display="none";recognizedScanWeight=null;
   $("scanImage").src=URL.createObjectURL(file);
-  $("scanStatus").textContent="📖 ვკითხულობ სასწორის ეკრანს...";
+  $("scanStatus").textContent="📖 ვამოწმებ მხოლოდ სასწორის ციფრებს...";
   try{
-    const worker=await loadOCR();
-    const result=await worker.recognize(file);
-    const w=extractWeight(result.data.text);
-    if(!w){$("scanStatus").textContent="❌ ციფრი ვერ ამოვიცანი. გადაიღე ეკრანი უფრო ახლოდან და მკაფიოდ.";return}
+    const worker=await loadOCR(),crops=await makeScaleCrops(file),hits=[];
+    for(const src of crops){
+      for(const psm of [7,8,13]){
+        await worker.setParameters({tessedit_pageseg_mode:psm,tessedit_char_whitelist:"0123456789.,",preserve_interword_spaces:"0"});
+        const result=await worker.recognize(src);
+        const w=extractWeight(result.data.text);
+        if(w)hits.push(w);
+      }
+    }
+    if(!hits.length){$("scanStatus").textContent="❌ სასწორის ციფრი ვერ ამოვიცანი. გადაიღე ეკრანი უფრო ახლოდან და პირდაპირ.";return}
+    const counts={};hits.forEach(w=>{const k=fmt(w);counts[k]=(counts[k]||0)+1});
+    const best=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+    const w=Number(best);
+    if(!Number.isFinite(w)){$("scanStatus").textContent="❌ ციფრი ვერ ამოვიცანი.";return}
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
     $("scanStatus").textContent="✅ ამოვიცანი: "+fmt(w)+" კგ";
     $("scanPreview").style.display="none";
     $("scanResult").style.display="none";
     $("scanImage").removeAttribute("src");
-  }catch(e){console.error(e);$("scanStatus").textContent="❌ ფოტოს ამოცნობა ვერ მოხერხდა. სცადე კიდევ ერთხელ."}
+  }catch(e){console.error(e);$("scanStatus").textContent="❌ ფოტოს ამოცნობა ვერ მოხერხდა. სცადე ეკრანი უფრო ახლოდან გადაიღო."}
 }
 $("cameraBtn").onclick=()=>{const i=$("scalePhoto");i.setAttribute("capture","environment");i.click()};
 $("scalePhoto").onchange=e=>{const file=e.target.files?.[0];if(file)scanScalePhoto(file);e.target.value=""};
