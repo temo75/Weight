@@ -318,13 +318,26 @@ $("zoomControl").oninput=async e=>{
 };
 $("captureCameraBtn").onclick=()=>{
   const video=$("cameraVideo"),stage=document.querySelector(".camera-stage"),frame=document.querySelector(".focus-frame");
-  if(!video.videoWidth)return;
+  if(!video.videoWidth||!video.videoHeight)return;
   const sr=stage.getBoundingClientRect(),fr=frame.getBoundingClientRect();
-  const sx=(fr.left-sr.left)/sr.width*video.videoWidth,sy=(fr.top-sr.top)/sr.height*video.videoHeight;
-  const sw=fr.width/sr.width*video.videoWidth,sh=fr.height/sr.height*video.videoHeight;
-  const cv=document.createElement("canvas");cv.width=Math.round(sw*1.8);cv.height=Math.round(sh*1.8);
-  cv.getContext("2d").drawImage(video,sx,sy,sw,sh,0,0,cv.width,cv.height);
-  cv.toBlob(blob=>{closeCamera();scanScalePhoto(blob)},"image/jpeg",.95);
+  const stageW=sr.width,stageH=sr.height,videoW=video.videoWidth,videoH=video.videoHeight;
+  // The preview uses object-fit:cover. Calculate the exact visible video rectangle
+  // first, then crop ONLY the rectangle shown to the user.
+  const scale=Math.max(stageW/videoW,stageH/videoH);
+  const shownW=videoW*scale,shownH=videoH*scale;
+  const offX=(stageW-shownW)/2,offY=(stageH-shownH)/2;
+  const fx=Math.max(0,fr.left-sr.left),fy=Math.max(0,fr.top-sr.top);
+  const fw=Math.min(stageW-fx,fr.width),fh=Math.min(stageH-fy,fr.height);
+  const sx=Math.max(0,(fx-offX)/scale),sy=Math.max(0,(fy-offY)/scale);
+  const sw=Math.min(videoW-sx,fw/scale),sh=Math.min(videoH-sy,fh/scale);
+  if(sw<=1||sh<=1)return;
+  const cv=document.createElement("canvas");
+  cv.width=Math.max(900,Math.round(sw*2));
+  cv.height=Math.max(350,Math.round(sh*2));
+  const ctx=cv.getContext("2d");
+  ctx.imageSmoothingEnabled=true;
+  ctx.drawImage(video,sx,sy,sw,sh,0,0,cv.width,cv.height);
+  cv.toBlob(blob=>{closeCamera();scanScalePhoto(blob)},"image/jpeg",.96);
 };
 $("scalePhoto").onchange=e=>{const file=e.target.files?.[0];if(file)scanScalePhoto(file);e.target.value=""};
 
