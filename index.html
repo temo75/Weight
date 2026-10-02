@@ -226,7 +226,7 @@ function makeScaleCrops(file){
     };img.onerror=reject;img.src=url;
   });
 }
-async async function scanScalePhoto(file){
+async function scanScalePhoto(file){
   $("scanPreview").style.display="block";$("scanResult").style.display="none";recognizedScanWeight=null;
   $("scanImage").src=URL.createObjectURL(file);
   $("scanStatus").textContent="📖 ვკითხულობ რიცხვს...";
