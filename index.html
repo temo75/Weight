@@ -229,7 +229,7 @@ function makeScaleCrops(file){
 async function scanScalePhoto(file){
   $("scanPreview").style.display="block";$("scanResult").style.display="none";recognizedScanWeight=null;
   $("scanImage").src=URL.createObjectURL(file);
-  $("scanStatus").textContent="📖 ვკითხულობ დიდ LCD ციფრებს...";
+  $("scanStatus").textContent="📖 ვამოწმებ LCD-ის დიდ ციფრებს...";
   try{
     const worker=await loadOCR();
     const img=await new Promise((resolve,reject)=>{
@@ -238,55 +238,55 @@ async function scanScalePhoto(file){
     const W=img.naturalWidth,H=img.naturalHeight;
     const readings=[];
 
-    // The uploaded image is already the exact camera-frame capture.
-    // Use a tight central crop around the LARGE LCD digits only.
+    // One purpose only: OCR the LCD area. Do not let the surrounding scale
+    // text, logo or kg label compete with the weight.
     const boxes=[
-      [.19,.18,.62,.66],
-      [.23,.22,.54,.58],
-      [.14,.12,.72,.78]
+      [.22,.20,.56,.58],
+      [.18,.16,.64,.66]
     ];
 
     for(const [x,y,w,h] of boxes){
       const sx=Math.round(W*x),sy=Math.round(H*y);
       const sw=Math.round(W*w),sh=Math.round(H*h);
-      const cv=document.createElement("canvas");
-      cv.width=Math.max(1400,sw*4);
-      cv.height=Math.max(500,sh*4);
-      const g=cv.getContext("2d",{willReadFrequently:true});
-      g.imageSmoothingEnabled=true;
-      g.drawImage(img,sx,sy,sw,sh,0,0,cv.width,cv.height);
+      const base=document.createElement("canvas");
+      base.width=Math.max(1600,sw*4);
+      base.height=Math.max(600,sh*4);
+      const bg=base.getContext("2d",{willReadFrequently:true});
+      bg.imageSmoothingEnabled=true;
+      bg.drawImage(img,sx,sy,sw,sh,0,0,base.width,base.height);
 
-      for(const mode of ["normal","contrast","binary"]){
+      for(const mode of ["normal","contrast","threshold","invert"]){
         const work=document.createElement("canvas");
-        work.width=cv.width;work.height=cv.height;
-        const wg=work.getContext("2d",{willReadFrequently:true});
-        wg.drawImage(cv,0,0);
+        work.width=base.width;work.height=base.height;
+        const g=work.getContext("2d",{willReadFrequently:true});
+        g.drawImage(base,0,0);
 
         if(mode!=="normal"){
-          const im=wg.getImageData(0,0,work.width,work.height),d=im.data;
-          let sum=0,n=0;
+          const im=g.getImageData(0,0,work.width,work.height),d=im.data;
+          let sum=0,count=0;
+          for(let i=0;i<d.length;i+=4){
+            sum+=.299*d[i]+.587*d[i+1]+.114*d[i+2];count++;
+          }
+          const mean=sum/count;
           for(let i=0;i<d.length;i+=4){
             const v=.299*d[i]+.587*d[i+1]+.114*d[i+2];
-            sum+=v;n++;
+            let n=v;
+            if(mode==="contrast") n=Math.max(0,Math.min(255,(v-85)*2.8+85));
+            if(mode==="threshold") n=v<(mean-10)?0:255;
+            if(mode==="invert") n=255-v;
+            d[i]=d[i+1]=d[i+2]=n;
           }
-          const mean=sum/n;
-          for(let i=0;i<d.length;i+=4){
-            const v=.299*d[i]+.587*d[i+1]+.114*d[i+2];
-            const z=mode==="contrast"
-              ?Math.max(0,Math.min(255,(v-80)*2.4+80))
-              :(v<(mean-5)?0:255);
-            d[i]=d[i+1]=d[i+2]=z;
-          }
-          wg.putImageData(im,0,0);
+          g.putImageData(im,0,0);
         }
 
-        for(const psm of [7,8,13]){
+        for(const psm of [7,6]){
           await worker.setParameters({
             tessedit_pageseg_mode:psm,
             tessedit_char_whitelist:"0123456789.",
             preserve_interword_spaces:"0",
             user_defined_dpi:"300",
-            classify_bln_numeric_mode:"1"
+            classify_bln_numeric_mode:"1",
+            tessedit_do_invert:"0"
           });
 
           const result=await worker.recognize(work);
@@ -298,7 +298,7 @@ async function scanScalePhoto(file){
           let m=compact.match(/(^|\D)(\d{2,3})\.(\d)(?!\d)/);
           if(m)n=Number(m[2]+"."+m[3]);
 
-          // Seven-segment LCD OCR commonly loses the decimal point.
+          // Seven-segment displays often lose the decimal point in OCR.
           if(n===null){
             m=compact.match(/(^|\D)(\d{3})(?!\d)/);
             if(m){
@@ -307,7 +307,6 @@ async function scanScalePhoto(file){
             }
           }
 
-          // Also accept a 3-digit sequence even when OCR inserts junk/spaces.
           if(n===null){
             const digits=(raw.match(/\d/g)||[]).join("");
             if(digits.length===3){
@@ -317,12 +316,7 @@ async function scanScalePhoto(file){
           }
 
           if(Number.isFinite(n)&&n>=30&&n<=250){
-            readings.push({
-              n:Math.round(n*10)/10,
-              conf,
-              raw,
-              tight:x>.2&&x<.25
-            });
+            readings.push({n:Math.round(n*10)/10,conf,mode,box:x<.2?"wide":"tight"});
           }
         }
       }
@@ -331,37 +325,41 @@ async function scanScalePhoto(file){
     URL.revokeObjectURL(img.src);
 
     if(!readings.length){
-      $("scanStatus").textContent="❌ დიდი ციფრები ვერ წავიკითხე — LCD ჩარჩოს შუაში მოაქციე.";
+      $("scanStatus").textContent="❌ LCD-ის რიცხვი ვერ წავიკითხე.";
       return;
     }
 
-    // Build agreement groups. A value seen repeatedly in the tight LCD crop
-    // outranks a one-off OCR hallucination.
+    // IMPORTANT: never choose a random OCR hallucination.
+    // A weight is accepted only when independent OCR passes agree.
     const groups={};
-    for(const r of readings){
-      const key=r.n.toFixed(1);
-      if(!groups[key])groups[key]={n:r.n,count:0,tight:0,conf:0};
-      groups[key].count++;
-      if(r.tight)groups[key].tight++;
-      groups[key].conf+=r.conf;
-    }
+    readings.forEach(r=>{
+      const k=r.n.toFixed(1);
+      if(!groups[k])groups[k]={n:r.n,passes:0,modes:new Set(),tight:0,conf:0};
+      groups[k].passes++;
+      groups[k].modes.add(r.mode);
+      if(r.box==="tight")groups[k].tight++;
+      groups[k].conf+=r.conf;
+    });
 
     const ranked=Object.values(groups).sort((a,b)=>
+      b.modes.size-a.modes.size ||
+      b.passes-a.passes ||
       b.tight-a.tight ||
-      b.count-a.count ||
       b.conf-a.conf
     );
-
     const best=ranked[0];
-    if(!best || (best.count===1 && best.conf<30)){
-      $("scanStatus").textContent="❌ ციფრები მკაფიოდ ვერ ამოვიცანი — არ შევინახავ არასწორ რიცხვს.";
+
+    // Require agreement from at least two different image-processing passes.
+    // This is the key change: 79.3/91.4 type one-off guesses are rejected.
+    if(!best || best.modes.size<2){
+      $("scanStatus").textContent="⚠️ რიცხვი ზუსტად ვერ დავადასტურე — არ შევიტან არასწორ მონაცემს.";
       return;
     }
 
     const w=best.n;
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
-    $("scanStatus").textContent="✅ ამოვიცანი: "+fmt(w)+" კგ";
+    $("scanStatus").textContent="✅ დადასტურებულია: "+fmt(w)+" კგ";
     $("scanPreview").style.display="none";
     $("scanResult").style.display="none";
     $("scanImage").removeAttribute("src");
