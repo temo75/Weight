@@ -229,7 +229,7 @@ function makeScaleCrops(file){
 async function scanScalePhoto(file){
   $("scanPreview").style.display="block";$("scanResult").style.display="none";recognizedScanWeight=null;
   $("scanImage").src=URL.createObjectURL(file);
-  $("scanStatus").textContent="📖 ვკითხულობ ჩარჩოში გადაღებულ რიცხვს...";
+  $("scanStatus").textContent="📖 ვკითხულობ მხოლოდ ჩარჩოში ჩასმულ დიდ ციფრებს...";
   try{
     const worker=await loadOCR();
     const img=await new Promise((resolve,reject)=>{
@@ -238,85 +238,121 @@ async function scanScalePhoto(file){
     const W=img.naturalWidth,H=img.naturalHeight;
     const readings=[];
 
-    // IMPORTANT: the camera capture is already EXACTLY the white rectangle.
-    // Do not crop it again with guessed coordinates. OCR the whole captured
-    // rectangle so the number cannot be cut away.
-    for(const mode of ["normal","gray","binary"]){
-      const cv=document.createElement("canvas");
-      cv.width=Math.max(1400,W*3);
-      cv.height=Math.max(500,H*3);
-      const g=cv.getContext("2d",{willReadFrequently:true});
-      g.imageSmoothingEnabled=true;
-      g.drawImage(img,0,0,cv.width,cv.height);
+    // The camera already gives us the exact focus-frame rectangle.
+    // For OCR, ignore the outer edge/fingers and concentrate on the large LCD digits.
+    const crops=[
+      {name:"full",x:.04,y:.05,w:.92,h:.90,weight:1},
+      {name:"center",x:.10,y:.08,w:.80,h:.84,weight:1.8},
+      {name:"digits",x:.16,y:.12,w:.68,h:.76,weight:2.8}
+    ];
 
-      if(mode!=="normal"){
-        const im=g.getImageData(0,0,cv.width,cv.height),d=im.data;
-        for(let i=0;i<d.length;i+=4){
-          const v=.299*d[i]+.587*d[i+1]+.114*d[i+2];
-          const n=mode==="gray"
-            ?Math.max(0,Math.min(255,(v-90)*2.2+90))
-            :(v<145?0:255);
-          d[i]=d[i+1]=d[i+2]=n;
-        }
-        g.putImageData(im,0,0);
-      }
+    for(const crop of crops){
+      const base=document.createElement("canvas");
+      const sx=Math.max(0,Math.round(W*crop.x)),sy=Math.max(0,Math.round(H*crop.y));
+      const sw=Math.max(1,Math.min(W-sx,Math.round(W*crop.w)));
+      const sh=Math.max(1,Math.min(H-sy,Math.round(H*crop.h)));
+      base.width=Math.max(1200,sw*3);
+      base.height=Math.max(450,sh*3);
+      const bg=base.getContext("2d",{willReadFrequently:true});
+      bg.imageSmoothingEnabled=true;
+      bg.drawImage(img,sx,sy,sw,sh,0,0,base.width,base.height);
 
-      for(const psm of [6,7,8,11,13]){
-        await worker.setParameters({
-          tessedit_pageseg_mode:psm,
-          tessedit_char_whitelist:"0123456789.,",
-          preserve_interword_spaces:"0",
-          user_defined_dpi:"300",
-          classify_bln_numeric_mode:"1"
-        });
-        const result=await worker.recognize(cv);
-        const raw=String(result.data?.text||"");
-        const conf=Number(result.data?.confidence)||0;
-        const compact=raw.replace(/,/g,".").replace(/\s+/g,"");
+      const variants=["normal","gray","otsu"];
+      for(const mode of variants){
+        const cv=document.createElement("canvas");
+        cv.width=base.width;cv.height=base.height;
+        const g=cv.getContext("2d",{willReadFrequently:true});
+        g.drawImage(base,0,0);
 
-        let n=null,m=compact.match(/(\d{2,3})\.(\d)/);
-        if(m)n=Number(m[1]+"."+m[2]);
-
-        // If OCR drops the decimal: 872 -> 87.2
-        if(n===null){
-          m=compact.match(/\b(\d{3})\b/);
-          if(m){
-            const p=Number(m[1]);
-            if(p>=300&&p<=999)n=p/10;
+        if(mode!=="normal"){
+          const im=g.getImageData(0,0,cv.width,cv.height),d=im.data;
+          let sum=0,count=0;
+          for(let i=0;i<d.length;i+=4){
+            const v=.299*d[i]+.587*d[i+1]+.114*d[i+2];
+            sum+=v;count++;
           }
-        }
-        if(n===null){
-          const digits=(raw.match(/\d/g)||[]).join("");
-          if(digits.length===3){
-            const p=Number(digits);
-            if(p>=300&&p<=999)n=p/10;
+          const mean=sum/count;
+          for(let i=0;i<d.length;i+=4){
+            const v=.299*d[i]+.587*d[i+1]+.114*d[i+2];
+            let n;
+            if(mode==="gray") n=Math.max(0,Math.min(255,(v-80)*2.5+80));
+            else n=v<(mean-8)?0:255;
+            d[i]=d[i+1]=d[i+2]=n;
           }
+          g.putImageData(im,0,0);
         }
 
-        if(Number.isFinite(n)&&n>=30&&n<=250){
-          readings.push({n:Math.round(n*10)/10,conf});
+        for(const psm of [7,8,13]){
+          await worker.setParameters({
+            tessedit_pageseg_mode:psm,
+            tessedit_char_whitelist:"0123456789.,",
+            preserve_interword_spaces:"0",
+            user_defined_dpi:"300",
+            classify_bln_numeric_mode:"1"
+          });
+          const result=await worker.recognize(cv);
+          const raw=String(result.data?.text||"");
+          const conf=Number(result.data?.confidence)||0;
+          const compact=raw.replace(/,/g,".").replace(/\s+/g,"");
+
+          let n=null,m=compact.match(/(\d{2,3})\.(\d)/);
+          if(m)n=Number(m[1]+"."+m[2]);
+
+          // LCD sometimes loses the decimal point: 872 -> 87.2.
+          if(n===null){
+            m=compact.match(/\b(\d{3})\b/);
+            if(m){
+              const p=Number(m[1]);
+              if(p>=300&&p<=999)n=p/10;
+            }
+          }
+          if(n===null){
+            const digits=(raw.match(/\d/g)||[]).join("");
+            if(digits.length===3){
+              const p=Number(digits);
+              if(p>=300&&p<=999)n=p/10;
+            }
+          }
+
+          if(Number.isFinite(n)&&n>=30&&n<=250){
+            readings.push({n:Math.round(n*10)/10,conf,score:conf*crop.weight});
+          }
         }
       }
     }
+
     URL.revokeObjectURL(img.src);
 
     if(!readings.length){
-      $("scanStatus").textContent="❌ რიცხვი ვერ წავიკითხე. ჩარჩოში მხოლოდ სასწორის ეკრანი გადაიღე.";
+      $("scanStatus").textContent="❌ რიცხვი ვერ წავიკითხე. გადაიღე LCD-ის ციფრები ჩარჩოს შუაში.";
       return;
     }
 
+    // Prefer agreement from the tight digit crop, then confidence.
     const groups={};
     readings.forEach(r=>{
       const k=r.n.toFixed(1);
-      if(!groups[k])groups[k]={n:r.n,count:0,conf:0};
-      groups[k].count++;groups[k].conf+=r.conf;
+      if(!groups[k])groups[k]={n:r.n,count:0,score:0,maxConf:0};
+      groups[k].count++;
+      groups[k].score+=r.score;
+      groups[k].maxConf=Math.max(groups[k].maxConf,r.conf);
     });
-    const ranked=Object.values(groups).sort((a,b)=>b.count-a.count||b.conf-a.conf);
-    const w=ranked[0].n;
 
+    const ranked=Object.values(groups).sort((a,b)=>
+      b.count-a.count || b.score-a.score || b.maxConf-a.maxConf
+    );
+    const best=ranked[0];
+
+    // Do not silently accept a weak one-off hallucination.
+    if(best.maxConf<25 && best.count<2){
+      $("scanStatus").textContent="❌ ციფრები მკაფიოდ ვერ ამოვიცანი. გადაიღე LCD უფრო ახლოდან.";
+      return;
+    }
+
+    const w=best.n;
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
-    $("scanStatus").textContent="✅ ამოვიცანი: "+fmt(w)+" კგ";
+    $("scanStatus").textContent="✅ ზუსტად ამოვიცანი: "+fmt(w)+" კგ";
     $("scanPreview").style.display="none";
     $("scanResult").style.display="none";
     $("scanImage").removeAttribute("src");
