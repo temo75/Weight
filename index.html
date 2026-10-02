@@ -166,8 +166,24 @@ async function loadOCR(){
   await ocrWorker.setParameters({tessedit_char_whitelist:"0123456789.,",preserve_interword_spaces:"1"});
   return ocrWorker;
 }
+function normalizeOCRNumber(text){
+  return text.replace(/,/g,".").replace(/[Oo]/g,"0").replace(/[Il|]/g,"1").replace(/[^0-9.]/g,"");
+}
+function extractWeightFromResult(result){
+  const words=(result?.data?.words||[]).map(w=>{
+    const raw=normalizeOCRNumber(w.text||"");
+    const m=raw.match(/\d{2,3}(?:\.\d{1,2})?/);
+    if(!m)return null;
+    const n=Number(m[0]),b=w.bbox||{};
+    const h=Math.max(0,(b.y1||0)-(b.y0||0)),wid=Math.max(0,(b.x1||0)-(b.x0||0));
+    if(!Number.isFinite(n)||n<30||n>250||h<10)return null;
+    return {n,h,wid,conf:Number(w.confidence)||0,score:h*1.8+wid*.15+(Number(w.confidence)||0)*.04};
+  }).filter(Boolean);
+  words.sort((a,b)=>b.score-a.score);
+  return words[0]||null;
+}
 function extractWeight(text){
-  const cleaned=text.replace(/,/g,".").replace(/[Oo]/g,"0").replace(/[Il|]/g,"1");
+  const cleaned=normalizeOCRNumber(text);
   const matches=cleaned.match(/\d{2,3}(?:\.\d{1,2})?/g)||[];
   const candidates=matches.map(Number).filter(n=>n>=30&&n<=250);
   return candidates.length?candidates[0]:null;
@@ -206,21 +222,23 @@ function makeScaleCrops(file){
 async function scanScalePhoto(file){
   $("scanPreview").style.display="block";$("scanResult").style.display="none";recognizedScanWeight=null;
   $("scanImage").src=URL.createObjectURL(file);
-  $("scanStatus").textContent="📖 ვამოწმებ მხოლოდ სასწორის ციფრებს...";
+  $("scanStatus").textContent="📖 ვკითხულობ მხოლოდ დიდ ციფრებს...";
   try{
     const worker=await loadOCR(),crops=await makeScaleCrops(file),hits=[];
     for(const src of crops){
-      for(const psm of [7,8,13]){
+      for(const psm of [7,8]){
         await worker.setParameters({tessedit_pageseg_mode:psm,tessedit_char_whitelist:"0123456789.,",preserve_interword_spaces:"0"});
         const result=await worker.recognize(src);
-        const w=extractWeight(result.data.text);
-        if(w)hits.push(w);
+        const hit=extractWeightFromResult(result);
+        if(hit)hits.push(hit);
       }
     }
-    if(!hits.length){$("scanStatus").textContent="❌ სასწორის ციფრი ვერ ამოვიცანი. გადაიღე ეკრანი უფრო ახლოდან და პირდაპირ.";return}
-    const counts={};hits.forEach(w=>{const k=fmt(w);counts[k]=(counts[k]||0)+1});
-    const best=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
-    const w=Number(best);
+    if(!hits.length){$("scanStatus").textContent="❌ დიდი ციფრები ვერ ამოვიცანი. გადაიღე ეკრანი მკაფიოდ.";return}
+    // Prefer the physically largest numeric text. The small "150kg / 330lb / 19st"
+    // print on the scale must never beat the large LCD reading.
+    hits.sort((a,b)=>b.score-a.score);
+    const best=hits[0];
+    const w=best.n;
     if(!Number.isFinite(w)){$("scanStatus").textContent="❌ ციფრი ვერ ამოვიცანი.";return}
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
