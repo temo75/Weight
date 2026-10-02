@@ -291,46 +291,19 @@ async async function scanScalePhoto(file){
 }
 let cameraStream=null,cameraTrack=null;
 async function openCamera(){
-  const modal=$("cameraModal"),video=$("cameraVideo");
   try{
-    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
-      $("scanStatus").textContent="❌ ამ ბრაუზერში კამერა მიუწვდომელია.";
-      return;
-    }
-    $("scanStatus").textContent="📷 კამერის გახსნა...";
-    // Do not use a timeout here: Android may need a few seconds for the
-    // permission dialog. Timing out loses the original user gesture.
-    cameraStream=await navigator.mediaDevices.getUserMedia({
-      video:{
-        facingMode:{ideal:"environment"},
-        width:{ideal:1280},
-        height:{ideal:960}
-      },
-      audio:false
-    });
+    const modal=$("cameraModal"),video=$("cameraVideo");
+    cameraStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}},audio:false});
     video.srcObject=cameraStream;
     cameraTrack=cameraStream.getVideoTracks()[0];
-
     const caps=cameraTrack.getCapabilities?cameraTrack.getCapabilities():{};
     const zoom=$("zoomControl"),zv=$("zoomValue");
     if(caps.zoom){
-      zoom.min=caps.zoom.min||1;
-      zoom.max=caps.zoom.max||1;
-      zoom.step=caps.zoom.step||0.1;
-      zoom.value=caps.zoom.min||1;
-      zoom.disabled=false;
-    }else{
-      zoom.min=1;zoom.max=1;zoom.value=1;zoom.disabled=true;
-    }
+      zoom.min=caps.zoom.min||1;zoom.max=caps.zoom.max||1;zoom.step=caps.zoom.step||0.1;zoom.value=Math.max(caps.zoom.min||1,Math.min(caps.zoom.max||1,caps.zoom.min||1));zoom.disabled=false;
+    }else{zoom.min=1;zoom.max=1;zoom.value=1;zoom.disabled=true}
     zv.textContent=Number(zoom.value).toFixed(1).replace(".0","")+"×";
     modal.style.display="flex";
-    $("scanStatus").textContent="";
-  }catch(e){
-    console.error("Camera error:",e);
-    if(cameraStream)cameraStream.getTracks().forEach(t=>t.stop());
-    cameraStream=null;cameraTrack=null;
-    $("scanStatus").textContent="❌ კამერის უფლება არ არის მიცემული ან კამერა დაკავებულია.";
-  }
+  }catch(e){console.error(e);$("scanStatus").textContent="❌ კამერის გახსნა ვერ მოხერხდა. მიეცი საიტს კამერის უფლება.";const i=$("scalePhoto");i.setAttribute("capture","environment");i.click()}
 }
 function closeCamera(){
   if(cameraStream)cameraStream.getTracks().forEach(t=>t.stop());
