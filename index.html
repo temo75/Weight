@@ -185,8 +185,8 @@ function extractWeightFromResult(result){
 }
 function normalizeScaleReading(n){
   if(!Number.isFinite(n))return null;
-  // A digital scale displays one decimal. OCR can occasionally drop the decimal.
-  if(Number.isInteger(n)&&n>=300&&n<=999)return Math.round(n/10)/10;
+  // This scale shows one decimal. OCR may read 87.2 as 872.
+  if(Number.isInteger(n)&&n>=300&&n<=999)return Math.round((n/10)*10)/10;
   return Math.round(n*10)/10;
 }
 function extractWeight(text){
@@ -231,39 +231,48 @@ async function scanScalePhoto(file){
   $("scanImage").src=URL.createObjectURL(file);
   $("scanStatus").textContent="📖 ვკითხულობ მხოლოდ დიდ ციფრებს...";
   try{
-    const worker=await loadOCR(),crops=await makeScaleCrops(file),hits=[];
-    for(const src of crops){
+    const worker=await loadOCR(),hits=[];
+    const img=await new Promise((resolve,reject)=>{
+      const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=URL.createObjectURL(file);
+    });
+    const W=img.naturalWidth,H=img.naturalHeight;
+    // The camera frame is already aimed at the scale. Read several overlapping
+    // areas around the upper/middle part where the LCD is visible.
+    const boxes=[
+      [0.08,0.12,0.84,0.62],
+      [0.10,0.18,0.80,0.52],
+      [0.12,0.24,0.76,0.42],
+      [0.18,0.28,0.64,0.34]
+    ];
+    for(const [x,y,w,h] of boxes){
+      const cv=document.createElement("canvas"),sw=Math.round(W*w),sh=Math.round(H*h);
+      cv.width=Math.max(900,sw*2);cv.height=Math.max(300,sh*2);
+      const g=cv.getContext("2d");g.imageSmoothingEnabled=true;
+      g.drawImage(img,Math.round(W*x),Math.round(H*y),sw,sh,0,0,cv.width,cv.height);
+      const data=g.getImageData(0,0,cv.width,cv.height),d=data.data;
+      for(let i=0;i<d.length;i+=4){
+        const v=.299*d[i]+.587*d[i+1]+.114*d[i+2];
+        const n=v>135?255:0; d[i]=d[i+1]=d[i+2]=n;
+      }
+      g.putImageData(data,0,0);
       for(const psm of [6,7,8,10,13]){
         await worker.setParameters({tessedit_pageseg_mode:psm,tessedit_char_whitelist:"0123456789.,",preserve_interword_spaces:"0"});
-        const result=await worker.recognize(src);
+        const result=await worker.recognize(cv);
         const hit=extractWeightFromResult(result);
         if(hit)hits.push(hit);
       }
     }
-    if(!hits.length){$("scanStatus").textContent="❌ დიდი ციფრები ვერ ამოვიცანი. გადაიღე ეკრანი მკაფიოდ.";return}
-    const groups={};
-    hits.forEach(h=>{
-      const w=normalizeScaleReading(h.n);
-      if(w!=null){
-        const k=w.toFixed(1);
-        if(!groups[k])groups[k]={w,count:0,score:0};
-        groups[k].count++;
-        groups[k].score+=h.score;
-      }
-    });
-    const ranked=Object.values(groups).sort((a,b)=>{
-      if(b.count!==a.count)return b.count-a.count;
-      return b.score-a.score;
-    });
-    if(!ranked.length){$("scanStatus").textContent="❌ წონა ვერ დადასტურდა.";return}
-    // Never accept a single OCR hallucination. The LCD reading must repeat
-    // across multiple OCR passes/crops before it is inserted.
-    const best=ranked[0];
-    if(best.count<2 && ranked.length>1){
-      $("scanStatus").textContent="❌ წონა მკაფიოდ ვერ დადასტურდა — გადაიღე ეკრანი პირდაპირ და ახლოდან.";return;
+    URL.revokeObjectURL(img.src);
+    if(!hits.length){$("scanStatus").textContent="❌ ციფრი ვერ წავიკითხე.";return}
+    // Take the visually largest number. No voting requirement: whatever the
+    // strongest LCD-sized reading is, that is what gets entered.
+    hits.sort((a,b)=>b.score-a.score);
+    let best=hits[0],w=normalizeScaleReading(best.n);
+    if(!Number.isFinite(w)||w<30||w>250){
+      const alt=hits.map(h=>({h,w:normalizeScaleReading(h.n)})).filter(x=>Number.isFinite(x.w)&&x.w>=30&&x.w<=250).sort((a,b)=>b.h.score-a.h.score)[0];
+      if(!alt){$("scanStatus").textContent="❌ ციფრი ვერ წავიკითხე.";return}
+      best=alt.h;w=alt.w;
     }
-    const w=best.w;
-    if(!Number.isFinite(w)||w<30||w>250){$("scanStatus").textContent="❌ წონა ვერ დადასტურდა.";return}
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
     $("scanStatus").textContent="✅ ამოვიცანი: "+fmt(w)+" კგ";
