@@ -229,64 +229,124 @@ function makeScaleCrops(file){
 async function scanScalePhoto(file){
   $("scanPreview").style.display="block";$("scanResult").style.display="none";recognizedScanWeight=null;
   $("scanImage").src=URL.createObjectURL(file);
-  $("scanStatus").textContent="📖 ვკითხულობ ჩარჩოში არსებულ რიცხვს...";
+  $("scanStatus").textContent="📖 ვკითხულობ LCD რიცხვს...";
   try{
     const worker=await loadOCR();
     const img=await new Promise((resolve,reject)=>{
       const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=URL.createObjectURL(file);
     });
     const W=img.naturalWidth,H=img.naturalHeight;
-    // The captured file is already the rectangle. Read its central LCD area only.
     const crops=[];
-    for(const box of [[.08,.08,.84,.76],[.15,.12,.70,.68]]){
-      const [x,y,w,h]=box,sw=Math.round(W*w),sh=Math.round(H*h);
+
+    // The photo is already the camera rectangle. The LCD is normally in its
+    // middle area, so deliberately ignore the edges where feet/brand/text can appear.
+    const boxes=[
+      [.18,.22,.64,.50],
+      [.22,.26,.56,.44],
+      [.12,.16,.76,.62]
+    ];
+
+    for(const [x,y,w,h] of boxes){
+      const sw=Math.round(W*w),sh=Math.round(H*h);
       const cv=document.createElement("canvas");
-      cv.width=Math.max(1000,sw*3);cv.height=Math.max(360,sh*3);
+      cv.width=Math.max(1000,sw*3);
+      cv.height=Math.max(420,sh*3);
       const g=cv.getContext("2d",{willReadFrequently:true});
       g.imageSmoothingEnabled=true;
       g.drawImage(img,Math.round(W*x),Math.round(H*y),sw,sh,0,0,cv.width,cv.height);
+
+      // Make the dark LCD segments stand out against the bright LCD background.
+      const im=g.getImageData(0,0,cv.width,cv.height),d=im.data;
+      for(let i=0;i<d.length;i+=4){
+        const v=.299*d[i]+.587*d[i+1]+.114*d[i+2];
+        const contrast=Math.max(0,Math.min(255,(v-105)*1.8+105));
+        d[i]=d[i+1]=d[i+2]=contrast;
+      }
+      g.putImageData(im,0,0);
       crops.push(cv);
     }
     URL.revokeObjectURL(img.src);
 
-    const values=[];
+    const readings=[];
     for(const cv of crops){
-      for(const psm of [7,13]){
-        await worker.setParameters({
-          tessedit_pageseg_mode:psm,
-          tessedit_char_whitelist:"0123456789.,",
-          preserve_interword_spaces:"0",
-          user_defined_dpi:"300",
-          classify_bln_numeric_mode:"1"
-        });
-        const result=await worker.recognize(cv);
-        const raw=(result.data?.text||"").replace(/\s+/g,"").replace(/,/g,".");
-        const exact=raw.match(/\d{2,3}\.\d/);
-        const packed=raw.match(/\d{3}/);
-        let n=null;
-        if(exact)n=Number(exact[0]);
-        else if(packed){
-          const p=Number(packed[0]);
-          if(p>=300&&p<=999)n=p/10;
-        }else{
-          const m=raw.match(/\d{2,3}(?:\.\d{1,2})?/);
-          if(m)n=Number(m[0]);
+      for(const threshold of [null,115,145,175]){
+        if(threshold!==null){
+          const g=cv.getContext("2d",{willReadFrequently:true});
+          const im=g.getImageData(0,0,cv.width,cv.height),d=im.data;
+          for(let i=0;i<d.length;i+=4){
+            const v=d[i];
+            const n=v<threshold?0:255;
+            d[i]=d[i+1]=d[i+2]=n;
+          }
+          g.putImageData(im,0,0);
         }
-        if(Number.isFinite(n)&&n>=30&&n<=250){
-          values.push({n:Math.round(n*10)/10,conf:Number(result.data?.confidence)||0});
+        for(const psm of [7,8,13]){
+          await worker.setParameters({
+            tessedit_pageseg_mode:psm,
+            tessedit_char_whitelist:"0123456789.,",
+            preserve_interword_spaces:"0",
+            user_defined_dpi:"300",
+            classify_bln_numeric_mode:"1"
+          });
+          const result=await worker.recognize(cv);
+          const raw=String(result.data?.text||"");
+          const compact=raw.replace(/,/g,".").replace(/\s+/g,"");
+          let n=null;
+
+          // Normal form: 87.2
+          let m=compact.match(/(\d{2,3})\.(\d)/);
+          if(m)n=Number(m[1]+"."+m[2]);
+
+          // OCR often drops the decimal: 872 -> 87.2.
+          if(n===null){
+            m=compact.match(/(\d{3})/);
+            if(m){
+              const p=Number(m[1]);
+              if(p>=300&&p<=999)n=p/10;
+            }
+          }
+
+          // OCR may put spaces around the decimal: "87 . 2".
+          if(n===null){
+            const digits=(raw.match(/\d/g)||[]).join("");
+            if(digits.length===3){
+              const p=Number(digits);
+              if(p>=300&&p<=999)n=p/10;
+            }
+          }
+
+          if(Number.isFinite(n)&&n>=30&&n<=250){
+            readings.push({
+              n:Math.round(n*10)/10,
+              conf:Number(result.data?.confidence)||0
+            });
+          }
         }
       }
     }
-    if(!values.length){
-      $("scanStatus").textContent="❌ რიცხვი ვერ ამოვიცანი — გადაიღე მხოლოდ ეკრანი ჩარჩოში.";
+
+    if(!readings.length){
+      $("scanStatus").textContent="❌ LCD რიცხვი ვერ წავიკითხე — გადაიღე 87.2 ჩარჩოს ცენტრში.";
       return;
     }
-    // Prefer the strongest OCR result, but only from the LCD crop.
-    values.sort((a,b)=>b.conf-a.conf);
-    const w=values[0].n;
+
+    // Use the reading that appears most consistently; all OCR is restricted
+    // to the LCD-focused crops, so small scale specifications cannot win.
+    const groups={};
+    readings.forEach(r=>{
+      const k=r.n.toFixed(1);
+      if(!groups[k])groups[k]={n:r.n,count:0,conf:0};
+      groups[k].count++;
+      groups[k].conf+=r.conf;
+    });
+    const ranked=Object.values(groups).sort((a,b)=>
+      b.count-a.count || b.conf-a.conf
+    );
+    const w=ranked[0].n;
+
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
-    $("scanStatus").textContent="✅ ამოვიცანი ზუსტად: "+fmt(w)+" კგ";
+    $("scanStatus").textContent="✅ ამოვიცანი: "+fmt(w)+" კგ";
     $("scanPreview").style.display="none";
     $("scanResult").style.display="none";
     $("scanImage").removeAttribute("src");
