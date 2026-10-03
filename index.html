@@ -32,7 +32,7 @@
 </section>
 
 <section class="card photo-scan">
-  <div class="section-head"><div><div class="title">📸 სასწორის ფოტო</div><div class="muted">ეკრანი მოაქციე ფოტოს ცენტრში — მხოლოდ წონის ციფრს წავიკითხავ</div></div></div>
+  <div class="section-head"><div><div class="title">📸 სასწორის ფოტო</div><div class="muted">მთელი ფოტო გადაიღე — AI მხოლოდ სასწორის წონას წაიკითხავს</div></div></div>
   <div class="scan-actions">
     <button class="btn" id="cameraBtn">📷 ფოტოს გადაღება</button>
   </div>
@@ -164,7 +164,7 @@ async function recognizeWeightWithAI(dataUrl){
  return Number.isFinite(n)&&n>0&&n<=500?{number:n,raw}:null;
 }
 function fileToDataUrl(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result||""));r.onerror=reject;r.readAsDataURL(file)})}
-async function scanScalePhoto(file){
+async async function scanScalePhoto(file){
  try{
   const dataUrl=await fileToDataUrl(file);
   $("scanStatus").textContent="🤖 AI ფოტოს ზუსტად კითხულობს...";
@@ -258,7 +258,6 @@ document.addEventListener("click",e=>{
   if(!btn)return;
   e.preventDefault();
   e.stopPropagation();
-  lastScaleCandidate=null;
   $("scanStatus").textContent="📸 კადრს ვაფიქსირებ...";
   captureCurrentCameraFrame(true);
 });
