@@ -527,7 +527,11 @@ $("zoomControl").oninput=async e=>{
 };
 
 // Manual capture button: the user can press it to request an immediate reading.
-$("captureCameraBtn").onclick=()=>{\n  lastScaleCandidate=null;\n  $("scanStatus").textContent="📸 კადრს ვაფიქსირებ...";\n  captureCurrentCameraFrame();\n};
+$("captureCameraBtn").onclick=()=>{
+  lastScaleCandidate=null;
+  $("scanStatus").textContent="📸 კადრს ვაფიქსირებ...";
+  captureCurrentCameraFrame();
+};
 
 $("scalePhoto").onchange=e=>{const file=e.target.files?.[0];if(file)scanScalePhoto(file);e.target.value=""};
 
