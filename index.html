@@ -13,6 +13,7 @@
 @media(max-width:560px){.stats{grid-template-columns:1fr 1fr}.insights{grid-template-columns:1fr 1fr 1fr}.big{font-size:54px}.row{grid-template-columns:1fr auto auto}.row .chg{display:none}.grid2,.tools{grid-template-columns:1fr}.app{padding-left:11px;padding-right:11px}}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="./instantly-ocr.js"></script>
 </head>
 <body>
 <main class="app">
@@ -379,81 +380,48 @@ function sevenSample(mask,x,y,w,h){
  return best;
 }
 
-let scaleOCRWorker=null;
-let scaleOCRLoading=null;
+let weightOCR=null;
+let weightOCRLoading=null;
 
-async function loadScaleOCR(){
- if(scaleOCRWorker)return scaleOCRWorker;
- if(scaleOCRLoading)return scaleOCRLoading;
- scaleOCRLoading=(async()=>{
-  if(!window.Tesseract){
-   await new Promise((resolve,reject)=>{
-    const s=document.createElement("script");
-    s.src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
-    s.onload=resolve;
-    s.onerror=()=>reject(new Error("OCR ვერ ჩაიტვირთა"));
-    document.head.appendChild(s);
-   });
-  }
-  const worker=await Tesseract.createWorker("eng",1);
-  scaleOCRWorker=worker;
-  return worker;
+async function loadWeightOCR(){
+ if(weightOCR)return weightOCR;
+ if(weightOCRLoading)return weightOCRLoading;
+ weightOCRLoading=(async()=>{
+  const ocr=new InstantlyOCR();
+  await ocr.init(msg=>{
+   $("scanStatus").textContent="🔎 ახალი OCR იტვირთება...";
+  });
+  weightOCR=ocr;
+  return ocr;
  })();
- try{return await scaleOCRLoading}finally{scaleOCRLoading=null}
+ try{return await weightOCRLoading}finally{weightOCRLoading=null}
 }
 
-function scaleOCRImage(dataUrl){
- return new Promise((resolve,reject)=>{
-  const img=new Image();
-  img.onload=()=>{
-   const cv=document.createElement("canvas");
-   const maxW=2200;
-   const scale=Math.min(1,maxW/img.naturalWidth);
-   cv.width=Math.max(1,Math.round(img.naturalWidth*scale));
-   cv.height=Math.max(1,Math.round(img.naturalHeight*scale));
-   const ctx=cv.getContext("2d");
-   ctx.drawImage(img,0,0,cv.width,cv.height);
-   resolve(cv.toDataURL("image/png"));
-  };
-  img.onerror=()=>reject(new Error("სურათი ვერ ჩაიტვირთა"));
-  img.src=dataUrl;
- });
-}
-
-function numericOCRText(text){
- const clean=String(text||"").replace(/,/g,".");
- const matches=clean.match(/\b\d{1,3}(?:\.\d{1,2})?\b/g)||[];
- const nums=matches.filter(x=>{
-  const n=Number(x);
-  return Number.isFinite(n)&&n>1&&n<=300;
- });
- if(!nums.length)return null;
- nums.sort((a,b)=>{
-  const ad=a.includes(".")?1:0;
-  const bd=b.includes(".")?1:0;
-  if(ad!==bd)return bd-ad;
-  return b.length-a.length;
- });
- return {raw:nums[0],number:Number(nums[0])};
+function pickWeightFromOCR(lines){
+ const candidates=[];
+ for(const item of (lines||[])){
+  const text=String(item.text||"").replace(/,/g,".").trim();
+  const found=text.match(/\b\d{1,3}(?:\.\d{1,2})?\b/g)||[];
+  for(const raw of found){
+   const n=Number(raw);
+   if(Number.isFinite(n)&&n>1&&n<=300)candidates.push({raw,number:n,score:Number(item.score||0)});
+  }
+ }
+ if(!candidates.length)return null;
+ candidates.sort((a,b)=>(b.raw.includes(".")-a.raw.includes("."))||((b.raw.length-b.score*0.001)-(a.raw.length-a.score*0.001)));
+ return candidates[0];
 }
 
 async function recognizeWeightOCR(dataUrl){
- const worker=await loadScaleOCR();
- const image=await scaleOCRImage(dataUrl);
- $("scanStatus").textContent="🔎 ჩვეულებრივი OCR ფოტოს კითხულობს...";
-
- const modes=["6","11","7"];
- for(const mode of modes){
-  await worker.setParameters({
-   tessedit_pageseg_mode:mode,
-   tessedit_char_whitelist:"0123456789."
-  });
-  const r=await worker.recognize(image);
-  const found=numericOCRText(r?.data?.text);
-  if(found)return found;
- }
-
- return null;
+ const ocr=await loadWeightOCR();
+ const img=new Image();
+ await new Promise((resolve,reject)=>{
+  img.onload=resolve;
+  img.onerror=()=>reject(new Error("სურათი ვერ ჩაიტვირთა"));
+  img.src=dataUrl;
+ });
+ const result=await ocr.extractText(img);
+ return pickWeightFromOCR(result.lines);
 }
 
 async function scanScalePhoto(file){
@@ -467,10 +435,10 @@ async function scanScalePhoto(file){
   }
   recognizedScanWeight=found.number;
   $("weightInput").value=found.raw;
-  $("scanStatus").textContent="✅ OCR-ით ამოცნობილია: "+found.raw+" კგ";
+  $("scanStatus").textContent="✅ ახალი OCR-ით ამოცნობილია: "+found.raw+" კგ";
   $("saveBtn").click();
  }catch(e){
-  console.warn("OCR",e);
+  console.warn("PaddleOCR",e);
   recognizedScanWeight=null;
   $("scanStatus").textContent="❌ OCR წაკითხვა ვერ მოხერხდა.";
  }
