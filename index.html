@@ -389,18 +389,20 @@ function makeTightSevenSegmentCrops(img){
   return crops;
 }
 
-async function scanScalePhoto(file){
+async function scanScalePhoto(file,manual=false){
   let url=null;
   try{
     const img=await new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;url=URL.createObjectURL(file);im.src=url});
     if(url){URL.revokeObjectURL(url);url=null}
     if(!cameraStream)return;
     const found=readScaleDisplayDirect(img);
-    if(!found||found.agreement<2||found.quality<.38){lastScaleCandidate=null;$("scanStatus").textContent="🔎 LCD ვერ დავადასტურე — კამერა აგრძელებს ძებნას...";return}
+    if(!found||found.quality<.30){lastScaleCandidate=null;$("scanStatus").textContent="🔎 LCD ვერ დავადასტურე — კამერა აგრძელებს ძებნას...";return}
     const key=found.number.toFixed(2);
-    if(lastScaleCandidate&&lastScaleCandidate.key===key)lastScaleCandidate.count++;
-    else lastScaleCandidate={key,count:1};
-    if(lastScaleCandidate.count<2){$("scanStatus").textContent="🔎 ვამოწმებ წაკითხვას: "+found.raw+"...";return}
+    if(!manual){
+      if(lastScaleCandidate&&lastScaleCandidate.key===key)lastScaleCandidate.count++;
+      else lastScaleCandidate={key,count:1};
+      if(lastScaleCandidate.count<2){$("scanStatus").textContent="🔎 ვამოწმებ წაკითხვას: "+found.raw+"...";return}
+    }
     const weight=Number(key);recognizedScanWeight=weight;$("weightInput").value=String(weight);
     $("scanStatus").textContent="✅ დადასტურებულია: "+found.raw+" კგ — ვინახავ...";
     $("saveBtn").click();
@@ -439,7 +441,7 @@ function captureCurrentCameraFrame(manual=false){
 
     // scanScalePhoto keeps the live camera open.
     // It will close the camera only after a confirmed reading.
-    Promise.resolve(scanScalePhoto(blob)).finally(()=>{
+    Promise.resolve(scanScalePhoto(blob,manual)).finally(()=>{
       autoScanBusy=false;
     });
   },"image/jpeg",.97);
