@@ -14,7 +14,7 @@ export default{async fetch(request,env){
   const d=await r.json();
   if(!r.ok)return new Response(JSON.stringify({error:"OpenAI request failed",detail:d?.error?.message||"unknown error"}),{status:502,headers:corsHeaders(origin)});
   const raw=String(d?.output_text||"").trim();
-  if(raw==="NO_WEIGHT"||!/^d{1,3}(?:.d{1,2})?$/.test(raw))return new Response(JSON.stringify({error:"No exact weight found"}),{status:422,headers:corsHeaders(origin)});
+  if(raw==="NO_WEIGHT"||!/^\d{1,3}(?:\.\d{1,2})?$/.test(raw))return new Response(JSON.stringify({error:"No exact weight found"}),{status:422,headers:corsHeaders(origin)});
   const weight=Number(raw);
   if(!Number.isFinite(weight)||weight<=0||weight>500)return new Response(JSON.stringify({error:"Invalid weight"}),{status:422,headers:corsHeaders(origin)});
   return new Response(JSON.stringify({weight,raw}),{status:200,headers:corsHeaders(origin)});
