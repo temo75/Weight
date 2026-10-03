@@ -208,6 +208,224 @@ async function loadOCR(){
   return ocrLoadPromise;
 }
 
+
+/*
+  Fast local reader for this exact kind of scale:
+  - isolates the central LCD digit area
+  - finds the four digit columns by projection
+  - detects the decimal dot separately
+  - classifies the seven segments directly
+  This runs before Tesseract, so a clear LCD can be accepted immediately.
+*/
+function readScaleDisplayDirect(img){
+  try{
+    const W=1000,H=400;
+    const cv=document.createElement("canvas");
+    cv.width=W;cv.height=H;
+    const g=cv.getContext("2d",{willReadFrequently:true});
+    g.drawImage(img,0,0,W,H);
+
+    const src=g.getImageData(0,0,W,H).data;
+    const gray=new Uint8Array(W*H);
+    for(let i=0,p=0;i<src.length;i+=4,p++){
+      gray[p]=Math.round(.299*src[i]+.587*src[i+1]+.114*src[i+2]);
+    }
+
+    const values=Array.from(gray);
+    values.sort((a,b)=>a-b);
+    const hi=values[Math.floor(values.length*.965)];
+    const lo=values[Math.floor(values.length*.065)];
+
+    const variants=[
+      {name:"bright",test:v=>v>=Math.max(185,hi)},
+      {name:"dark",test:v=>v<=Math.min(150,lo+35)}
+    ];
+
+    const patterns={
+      "1111110":"0","0110000":"1","1101101":"2","1111001":"3",
+      "0110011":"4","1011011":"5","1011111":"6","1110000":"7",
+      "1111111":"8","1111011":"9"
+    };
+
+    const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+    const segDefs=[
+      [0.22,0.04,0.78,0.18], // a
+      [0.70,0.12,0.92,0.48], // b
+      [0.70,0.52,0.92,0.88], // c
+      [0.22,0.82,0.78,0.96], // d
+      [0.08,0.52,0.30,0.88], // e
+      [0.08,0.12,0.30,0.48], // f
+      [0.22,0.43,0.78,0.57]  // g
+    ];
+
+    let best=null;
+
+    for(const variant of variants){
+      // The LCD digits occupy the middle part of the captured focus-frame.
+      const x0=Math.round(W*.16),x1=Math.round(W*.84);
+      const y0=Math.round(H*.18),y1=Math.round(H*.76);
+      const rw=x1-x0,rh=y1-y0;
+
+      const binary=new Uint8Array(rw*rh);
+      for(let y=0;y<rh;y++){
+        for(let x=0;x<rw;x++){
+          binary[y*rw+x]=variant.test(gray[(y+y0)*W+(x+x0)])?1:0;
+        }
+      }
+
+      // Vertical projection. Digit strokes produce persistent occupied columns.
+      const col=new Uint16Array(rw);
+      for(let x=0;x<rw;x++){
+        let n=0;
+        for(let y=0;y<rh;y++)n+=binary[y*rw+x];
+        col[x]=n;
+      }
+
+      // Require at least 2 active pixels; merge tiny gaps caused by glare.
+      const active=new Uint8Array(rw);
+      for(let x=0;x<rw;x++)active[x]=col[x]>=2?1:0;
+
+      for(let pass=0;pass<2;pass++){
+        for(let x=1;x<rw-1;x++){
+          if(!active[x]&&active[x-1]&&active[x+1])active[x]=1;
+        }
+      }
+
+      const groups=[];
+      let st=-1;
+      for(let x=0;x<rw;x++){
+        if(active[x]&&st<0)st=x;
+        if((!active[x]||x===rw-1)&&st>=0){
+          const en=(active[x]?x:x-1);
+          if(en-st+1>=3)groups.push({a:st,b:en});
+          st=-1;
+        }
+      }
+
+      // Merge groups that belong to the same digit (e.g. split vertical strokes).
+      const merged=[];
+      for(const gr of groups){
+        const prev=merged[merged.length-1];
+        if(prev && gr.a-prev.b<=5)prev.b=gr.b;
+        else merged.push({...gr});
+      }
+
+      // Decimal dot is short; digits are much taller.
+      const candidates=[];
+      const dots=[];
+      for(const gr of merged){
+        let top=rh,bottom=-1,count=0;
+        for(let x=gr.a;x<=gr.b;x++){
+          for(let y=0;y<rh;y++){
+            if(binary[y*rw+x]){
+              count++;
+              if(y<top)top=y;
+              if(y>bottom)bottom=y;
+            }
+          }
+        }
+        const h=bottom-top+1;
+        if(h>=Math.round(rh*.28) && count>=25){
+          candidates.push(gr);
+        }else if(h>=3 && h<=Math.round(rh*.24) && count>=8){
+          dots.push({...gr,center:(gr.a+gr.b)/2});
+        }
+      }
+
+      if(candidates.length<4)continue;
+
+      // Keep the four strongest/tallest digit groups.
+      candidates.sort((a,b)=>a.a-b.a);
+      if(candidates.length>4){
+        candidates.splice(4);
+      }
+      if(candidates.length!==4)continue;
+
+      const centers=candidates.map(g=>(g.a+g.b)/2);
+      const gaps=[];
+      for(let i=1;i<centers.length;i++)gaps.push(centers[i]-centers[i-1]);
+      const normalGap=gaps.slice().sort((a,b)=>a-b)[Math.floor(gaps.length/2)]||1;
+
+      let text="";
+      let confidence=1;
+      let valid=true;
+
+      for(let di=0;di<4;di++){
+        const center=centers[di];
+        const cellW=clamp(normalGap*.82,45,150);
+        const xa=Math.round(center-cellW/2);
+        const xb=Math.round(center+cellW/2);
+        const ya=0,yb=rh;
+
+        const bits=[];
+        for(const [sx,sy,ex,ey] of segDefs){
+          const ax=clamp(Math.round(xa+(xb-xa)*sx),0,rw-1);
+          const bx=clamp(Math.round(xa+(xb-xa)*ex),0,rw-1);
+          const ay=clamp(Math.round(ya+(yb-ya)*sy),0,rh-1);
+          const by=clamp(Math.round(ya+(yb-ya)*ey),0,rh-1);
+
+          let on=0,total=0;
+          for(let yy=ay;yy<=by;yy++){
+            for(let xx=ax;xx<=bx;xx++){
+              total++;
+              if(binary[yy*rw+xx])on++;
+            }
+          }
+          bits.push((on/Math.max(1,total))>.10?1:0);
+        }
+
+        const pattern=bits.join("");
+        const digit=patterns[pattern];
+
+        if(digit===undefined){
+          valid=false;
+          break;
+        }
+
+        text+=digit;
+
+        // Compare segment strength to expected on/off state for confidence.
+        const expected=pattern;
+        let strong=0;
+        for(const ch of expected)if(ch==="1")strong++;
+        confidence*=strong/7;
+      }
+
+      if(!valid)continue;
+
+      // Decimal: choose a small dot between digit 2 and 3 first, then 3 and 4.
+      let decimalAfter=0;
+      for(const d of dots){
+        const dc=d.center;
+        if(dc>centers[1]+normalGap*.20 && dc<centers[2]-normalGap*.20){
+          decimalAfter=2;break;
+        }
+        if(dc>centers[2]+normalGap*.20 && dc<centers[3]-normalGap*.20){
+          decimalAfter=3;
+        }
+      }
+
+      let number;
+      if(decimalAfter===2)number=Number(text.slice(0,2)+"."+text.slice(2));
+      else if(decimalAfter===3)number=Number(text.slice(0,3)+"."+text.slice(3));
+      else number=Number(text);
+
+      if(!Number.isFinite(number)||number<1||number>300)continue;
+
+      // Require four recognized digits and a sensible segment pattern.
+      const score=Math.min(1,0.80+confidence*.20);
+      if(!best||score>best.score){
+        best={number,raw:text,score,decimalAfter,variant:variant.name};
+      }
+    }
+
+    return best;
+  }catch(e){
+    console.warn("direct seven-segment reader",e);
+    return null;
+  }
+}
+
 function normalizeSevenOCR(text){
   return String(text||"")
     .replace(/,/g,".")
@@ -222,7 +440,7 @@ function parseSevenOCR(text){
 
   const add=n=>{
     if(!Number.isFinite(n)||n<30||n>250)return;
-    candidates.push(Math.round(n*10)/10);
+    candidates.push(Math.round(n*100)/100);
   };
 
   let m=s.match(/(\d{2,3})\.(\d{1,2})/);
@@ -360,6 +578,22 @@ async function scanScalePhoto(file){
       A single guess is NEVER accepted.
     */
     const votes=[];
+
+    // First try the local seven-segment reader. A clear LCD is accepted immediately.
+    const direct=readScaleDisplayDirect(img);
+    if(direct && direct.score>=0.94){
+      const exact=direct.number;
+      $("scanStatus").textContent="✅ ეკრანი ზუსტად ამოვიკითხე: "+exact+" — ვინახავ...";
+      $("weightInput").value=String(exact);
+      $("saveBtn").click();
+
+      $("scanImage").removeAttribute("src");
+      $("scanPreview").style.display="none";
+      $("scanResult").style.display="none";
+      closeCamera();
+      return;
+    }
+
     const worker=await loadOCR();
     const prepared=makeSevenSegmentOCRImages(img);
     const tight=makeTightSevenSegmentCrops(img);
