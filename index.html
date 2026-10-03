@@ -441,7 +441,7 @@ async function scanScalePhoto(file,manual=false){
 
     // Save immediately, then turn the camera off immediately.
     $("saveBtn").click();
-    closeCamera();
+    setTimeout(()=>closeCamera(),1000);
 
     $("scanImage").removeAttribute("src");
     $("scanPreview").style.display="none";
