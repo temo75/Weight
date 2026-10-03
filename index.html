@@ -387,7 +387,26 @@ function sevenSegmentPatternScore(mask,x,y,w,h){
   for(let yy=y1;yy<y2;yy++)for(let xx=x1;xx<x2;xx++){s+=d[yy*mask.width+xx];n++}
   return n?s/n:0;
  }
+ function lineH(cx,cy){
+  const core=mean(cx-.30*w,cy-.035*h,cx+.30*w,cy+.035*h);
+  const side=(mean(cx-.30*w,cy-.13*h,cx+.30*w,cy-.06*h)+mean(cx-.30*w,cy+.06*h,cx+.30*w,cy+.13*h))/2;
+  return Math.max(0,core-side);
+ }
+ function lineV(cx,cy){
+  const core=mean(cx-.035*w,cy-.30*h,cx+.035*w,cy+.30*h);
+  const side=(mean(cx-.13*w,cy-.30*h,cx-.06*w,cy+.30*h)+mean(cx+.06*w,cy-.30*h,cx+.13*w,cy+.30*h))/2;
+  return Math.max(0,core-side);
+ }
  const seg=[
+  lineH(x+.50*w,y+.15*h),
+  lineV(x+.80*w,y+.30*h),
+  lineV(x+.80*w,y+.70*h),
+  lineH(x+.50*w,y+.50*h),
+  lineV(x+.20*w,y+.70*h),
+  lineV(x+.20*w,y+.30*h),
+  lineH(x+.50*w,y+.85*h)
+ ];
+ const raw=[
   mean(x+.20*w,y+.08*h,x+.80*w,y+.22*h),
   mean(x+.68*w,y+.17*h,x+.92*w,y+.45*h),
   mean(x+.68*w,y+.55*h,x+.92*w,y+.83*h),
@@ -396,14 +415,16 @@ function sevenSegmentPatternScore(mask,x,y,w,h){
   mean(x+.08*w,y+.17*h,x+.32*w,y+.45*h),
   mean(x+.20*w,y+.78*h,x+.80*w,y+.92*h)
  ];
- const bg=(mean(x+.35*w,y+.25*h,x+.65*w,y+.38*h)+mean(x+.35*w,y+.62*h,x+.65*w,y+.75*h)+mean(x+.40*w,y+.38*h,x+.60*w,y+.62*h))/3;
- const values=seg.map(v=>Math.max(0,v-bg));
- let best={char:"?",score:-Infinity,values};
+ let best={char:"?",score:-Infinity,values:raw,lines:seg};
  for(const ch in SEVEN_DIGIT_MASKS){
-  const m=SEVEN_DIGIT_MASKS[ch];let on=0,off=0;
-  for(let i=0;i<7;i++){if(m[i])on+=values[i];else off+=Math.max(0,.55-values[i])}
-  const score=(on/4+off/3.5)/2;
-  if(score>best.score)best={char:ch,score,values};
+  const m=SEVEN_DIGIT_MASKS[ch];
+  let on=0,off=0,shape=0;
+  for(let i=0;i<7;i++){
+   if(m[i]){on+=raw[i];shape+=seg[i]}
+   else off+=Math.max(0,.52-raw[i]);
+  }
+  const score=(on/4+off/3.5)/2+shape*.75;
+  if(score>best.score)best={char:ch,score,values:raw,lines:seg};
  }
  return best;
 }
@@ -453,7 +474,9 @@ function sevenDecodeBand(mask,x,y,w,h){
   answers.push(best);
  }
  const raw=answers.map(a=>a.char).join(""),confidence=answers.reduce((s,a)=>s+a.score,0)/answers.length;
- if(Math.min(...answers.map(a=>a.score))<.52||confidence<.60)return null;
+ if(Math.min(...answers.map(a=>a.score))<.82||confidence<.92)return null;
+ const activeShape=answers.map(a=>a.lines.filter((v,i)=>SEVEN_DIGIT_MASKS[a.char][i]).reduce((s,v)=>s+v,0)/Math.max(1,SEVEN_DIGIT_MASKS[a.char].reduce((s,v)=>s+v,0)));
+ if(activeShape.some(v=>v<.055))return null;
  const margins=answers.map(a=>{
   const v=a.values,ss=[];
   for(const ch in SEVEN_DIGIT_MASKS){
@@ -498,7 +521,7 @@ async function recognizeWeightSevenSegment(dataUrl){
   return sb-sa;
  });
  const best=clusters[0],top=best.reduce((a,b)=>b.confidence>a.confidence?b:a);
- if(best.length<3&&top.confidence<.78)return null;
+ if(best.length<4&&top.confidence<1.05)return null;
  return {raw:top.raw,number:top.number};
 }
 async function scanScalePhoto(file){
