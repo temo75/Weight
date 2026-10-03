@@ -1,28 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
 <defs>
- <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#04d8ff"/><stop offset=".35" stop-color="#087ff5"/><stop offset="1" stop-color="#102bba"/></linearGradient>
- <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff6a0"/><stop offset=".22" stop-color="#ffd43b"/><stop offset=".5" stop-color="#fff1a0"/><stop offset=".72" stop-color="#e9a900"/><stop offset="1" stop-color="#fff06a"/></linearGradient>
- <filter id="glow"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
- <filter id="shadow"><feDropShadow dx="0" dy="7" stdDeviation="7" flood-opacity=".4"/></filter>
+<radialGradient id="b" cx="50%" cy="38%" r="70%"><stop stop-color="#19cfff"/><stop offset=".55" stop-color="#087ff5"/><stop offset="1" stop-color="#063bbd"/></radialGradient>
+<linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff58a"/><stop offset=".28" stop-color="#ffc928"/><stop offset=".55" stop-color="#fff3a0"/><stop offset=".82" stop-color="#e4a000"/><stop offset="1" stop-color="#fff06a"/></linearGradient>
+<filter id="s"><feDropShadow dx="0" dy="5" stdDeviation="5" flood-opacity=".38"/></filter>
 </defs>
-<rect width="512" height="512" rx="92" fill="url(#bg)"/>
-<rect x="8" y="8" width="496" height="496" rx="86" fill="none" stroke="#35eaff" stroke-width="7" filter="url(#glow)"/>
-<g transform="translate(166 105) scale(.42)" fill="url(#gold)" stroke="#b97800" stroke-width="4" stroke-linejoin="round" filter="url(#shadow)">
- <circle cx="256" cy="82" r="23"/>
- <rect x="246" y="98" width="20" height="150" rx="10"/>
- <path d="M256 108 C208 108 164 112 119 102 C108 100 101 107 104 118 C108 132 124 137 139 135 C181 130 218 126 256 126 C294 126 331 130 373 135 C388 137 404 132 408 118 C411 107 404 100 393 102 C348 112 304 108 256 108Z"/>
- <path d="M119 117 L62 245 Q58 254 68 258 H170 Q180 254 176 245 Z"/>
- <path d="M393 117 L336 245 Q332 254 342 258 H444 Q454 254 450 245 Z"/>
- <path d="M104 248 Q119 279 169 279 Q219 279 234 248 Z"/>
- <path d="M278 248 Q293 279 343 279 Q393 279 408 248 Z"/>
- <rect x="235" y="238" width="42" height="22" rx="10"/>
- <path d="M242 257 H270 L284 326 H228 Z"/>
- <path d="M228 318 H284 L306 351 H206 Z"/>
- <path d="M194 346 H318 L337 370 H175 Z"/>
+<rect width="512" height="512" fill="#087ff5"/>
+<circle cx="256" cy="256" r="222" fill="url(#b)" stroke="#fff" stroke-width="30"/>
+<g transform="translate(256 35) scale(.64)" fill="url(#g)" stroke="#b97800" stroke-width="4" stroke-linejoin="round" filter="url(#s)">
+<circle cx="0" cy="55" r="22"/>
+<rect x="-10" y="72" width="20" height="145" rx="10"/>
+<path d="M0 82C-48 82-92 87-137 77-149 74-156 82-152 94c5 14 20 19 35 17 43-5 80-9 117-9s74 4 117 9c15 2 30-3 35-17 4-12-3-20-15-17C92 87 48 82 0 82Z"/>
+<path d="M-137 91l-57 128q-4 9 6 13h102q10-4 6-13z"/>
+<path d="M137 91L80 219q-4 9 6 13h102q10-4 6-13z"/>
+<path d="M-152 222q15 31 65 31t65-31z"/>
+<path d="M22 222q15 31 65 31t65-31z"/>
+<rect x="-21" y="212" width="42" height="22" rx="10"/>
+<path d="M-14 231h28l14 69h-56z"/>
+<path d="M-28 292h56l22 33h-100z"/>
+<path d="M-62 320H62l19 24H-81z"/>
 </g>
-<g fill="none" stroke="#fff6b0" stroke-width="4" opacity=".9">
- <path d="M68 246 Q119 263 170 246"/>
- <path d="M342 246 Q393 263 444 246"/>
-</g>
-<text x="256" y="414" text-anchor="middle" font-family="Arial,sans-serif" font-size="56" font-weight="900" letter-spacing="2" fill="#fff" stroke="#007cff" stroke-width="8" paint-order="stroke" filter="url(#shadow)">TEMO</text>
+<text x="256" y="425" text-anchor="middle" font-family="Arial,sans-serif" font-size="58" font-weight="900" letter-spacing="2" fill="#fff" stroke="#087ff5" stroke-width="6" paint-order="stroke" filter="url(#s)">TEMO</text>
 </svg>
