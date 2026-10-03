@@ -42,12 +42,12 @@
     <div class="camera-stage">
       <video id="cameraVideo" autoplay playsinline muted></video>
       <div class="focus-frame"></div>
-      <div class="focus-label">🔢 მხოლოდ რიცხვები მოაქციე ჩარჩოში</div>
+      <div class="focus-label">🔢 ჩასვი ციფრები ჩარჩოში — სწორ გამოსახულებას თვითონ დაიჭერს</div>
     </div>
     <div class="zoom-row"><span>🔍</span><input id="zoomControl" type="range" min="1" max="1" step="0.1" value="1"><span id="zoomValue">1×</span></div>
     <div class="camera-actions">
       <button class="btn camera-close" id="closeCameraBtn">✕ დახურვა</button>
-      <button class="btn" id="captureCameraBtn">📸 გადაღება</button>
+      <button class="btn" id="captureCameraBtn" style="display:none">📸 ავტომატური ამოცნობა</button>
     </div>
   </div>
 </div>
@@ -468,11 +468,16 @@ async function scanScalePhoto(file){
     const w=Math.round(best.value*10)/10;
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
-    $("scanStatus").textContent="✅ 7-segment OCR-ით დადასტურებულია: "+fmt(w)+" კგ";
-    closeCamera();
+    $("scanStatus").textContent="✅ ზუსტად ამოვიცანი: "+fmt(w)+" კგ — ვინახავ მონაცემს...";
+    
+    // Automatic workflow: recognize → save today's record → refresh dashboard.
+    $("saveBtn").click();
+
+    // Remove the temporary photo and close the camera only after the data is saved.
+    $("scanImage").removeAttribute("src");
     $("scanPreview").style.display="none";
     $("scanResult").style.display="none";
-    $("scanImage").removeAttribute("src");
+    closeCamera();
 
   }catch(e){
     console.error("scale OCR",e);
@@ -490,35 +495,14 @@ async function scanScalePhoto(file){
 }
 
 let cameraStream=null,cameraTrack=null;
-async function openCamera(){
-  try{
-    const modal=$("cameraModal"),video=$("cameraVideo");
-    cameraStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}},audio:false});
-    video.srcObject=cameraStream;
-    cameraTrack=cameraStream.getVideoTracks()[0];
-    const caps=cameraTrack.getCapabilities?cameraTrack.getCapabilities():{};
-    const zoom=$("zoomControl"),zv=$("zoomValue");
-    if(caps.zoom){
-      zoom.min=caps.zoom.min||1;zoom.max=caps.zoom.max||1;zoom.step=caps.zoom.step||0.1;zoom.value=Math.max(caps.zoom.min||1,Math.min(caps.zoom.max||1,caps.zoom.min||1));zoom.disabled=false;
-    }else{zoom.min=1;zoom.max=1;zoom.value=1;zoom.disabled=true}
-    zv.textContent=Number(zoom.value).toFixed(1).replace(".0","")+"×";
-    modal.style.display="flex";
-  }catch(e){console.error(e);$("scanStatus").textContent="❌ კამერის გახსნა ვერ მოხერხდა. მიეცი საიტს კამერის უფლება.";const i=$("scalePhoto");i.setAttribute("capture","environment");i.click()}
-}
-function closeCamera(){
-  if(cameraStream)cameraStream.getTracks().forEach(t=>t.stop());
-  cameraStream=null;cameraTrack=null;$("cameraVideo").srcObject=null;$("cameraModal").style.display="none";
-}
-$("cameraBtn").onclick=openCamera;
-$("closeCameraBtn").onclick=closeCamera;
-$("zoomControl").oninput=async e=>{
-  const z=Number(e.target.value);$("zoomValue").textContent=z.toFixed(1).replace(".0","")+"×";
-  if(cameraTrack&&cameraTrack.applyConstraints)try{await cameraTrack.applyConstraints({advanced:[{zoom:z}]})}catch(_){}
-};
-$("captureCameraBtn").onclick=()=>{
+let autoScanTimer=null,autoScanBusy=false;
+
+function captureCurrentCameraFrame(){
   const video=$("cameraVideo"),stage=document.querySelector(".camera-stage"),frame=document.querySelector(".focus-frame");
-  if(!video.videoWidth||!video.videoHeight)return;
+  if(!video.videoWidth||!video.videoHeight||!cameraStream)return;
+
   const sr=stage.getBoundingClientRect(),fr=frame.getBoundingClientRect();
+
   // Match the exact object-fit:cover preview geometry, without stretching.
   const scale=Math.max(sr.width/video.videoWidth,sr.height/video.videoHeight);
   const shownW=video.videoWidth*scale,shownH=video.videoHeight*scale;
@@ -527,13 +511,112 @@ $("captureCameraBtn").onclick=()=>{
   const sx=Math.max(0,(fx-offX)/scale),sy=Math.max(0,(fy-offY)/scale);
   const sw=Math.min(video.videoWidth-sx,fr.width/scale);
   const sh=Math.min(video.videoHeight-sy,fr.height/scale);
+
   if(sw<=1||sh<=1)return;
+
   const cv=document.createElement("canvas");
   cv.width=Math.max(900,Math.round(sw*2));
   cv.height=Math.max(350,Math.round(sh*2));
   cv.getContext("2d").drawImage(video,sx,sy,sw,sh,0,0,cv.width,cv.height);
-  cv.toBlob(blob=>{scanScalePhoto(blob)},"image/jpeg",.97);
+
+  cv.toBlob(blob=>{
+    if(!blob||autoScanBusy||!cameraStream)return;
+    autoScanBusy=true;
+
+    // scanScalePhoto keeps the live camera open.
+    // It will close the camera only after a confirmed reading.
+    Promise.resolve(scanScalePhoto(blob)).finally(()=>{
+      autoScanBusy=false;
+    });
+  },"image/jpeg",.97);
+}
+
+function startAutoScaleReader(){
+  clearInterval(autoScanTimer);
+  autoScanBusy=false;
+
+  // Give the camera a moment to produce its first full-resolution frame.
+  setTimeout(()=>{
+    if(!cameraStream)return;
+
+    captureCurrentCameraFrame();
+
+    // Keep sampling until one reading is independently confirmed.
+    autoScanTimer=setInterval(()=>{
+      if(cameraStream&&!autoScanBusy)captureCurrentCameraFrame();
+    },1400);
+  },900);
+}
+
+async function openCamera(){
+  try{
+    const modal=$("cameraModal"),video=$("cameraVideo");
+    cameraStream=await navigator.mediaDevices.getUserMedia({
+      video:{
+        facingMode:{ideal:"environment"},
+        width:{ideal:1920},
+        height:{ideal:1080}
+      },
+      audio:false
+    });
+
+    video.srcObject=cameraStream;
+    cameraTrack=cameraStream.getVideoTracks()[0];
+
+    const caps=cameraTrack.getCapabilities?cameraTrack.getCapabilities():{};
+    const zoom=$("zoomControl"),zv=$("zoomValue");
+
+    if(caps.zoom){
+      zoom.min=caps.zoom.min||1;
+      zoom.max=caps.zoom.max||1;
+      zoom.step=caps.zoom.step||0.1;
+      zoom.value=Math.max(caps.zoom.min||1,Math.min(caps.zoom.max||1,caps.zoom.min||1));
+      zoom.disabled=false;
+    }else{
+      zoom.min=1;zoom.max=1;zoom.value=1;zoom.disabled=true;
+    }
+
+    zv.textContent=Number(zoom.value).toFixed(1).replace(".0","")+"×";
+    modal.style.display="flex";
+    $("scanStatus").textContent="👀 კამერა ჩართულია — სწორ გამოსახულებას ავტომატურად ვეძებ...";
+
+    startAutoScaleReader();
+
+  }catch(e){
+    console.error(e);
+    $("scanStatus").textContent="❌ კამერის გახსნა ვერ მოხერხდა. მიეცი საიტს კამერის უფლება.";
+    const i=$("scalePhoto");
+    i.setAttribute("capture","environment");
+    i.click();
+  }
+}
+
+function closeCamera(){
+  clearInterval(autoScanTimer);
+  autoScanTimer=null;
+  autoScanBusy=false;
+
+  if(cameraStream)cameraStream.getTracks().forEach(t=>t.stop());
+  cameraStream=null;
+  cameraTrack=null;
+  $("cameraVideo").srcObject=null;
+  $("cameraModal").style.display="none";
+}
+
+$("cameraBtn").onclick=openCamera;
+$("closeCameraBtn").onclick=closeCamera;
+
+$("zoomControl").oninput=async e=>{
+  const z=Number(e.target.value);
+  $("zoomValue").textContent=z.toFixed(1).replace(".0","")+"×";
+  if(cameraTrack&&cameraTrack.applyConstraints)
+    try{await cameraTrack.applyConstraints({advanced:[{zoom:z}]})}catch(_){}
 };
+
+// Manual button is kept in the DOM for compatibility, but the camera now
+// captures frames automatically; the user does not need to press it.
+$("captureCameraBtn").onclick=()=>captureCurrentCameraFrame();
+
 $("scalePhoto").onchange=e=>{const file=e.target.files?.[0];if(file)scanScalePhoto(file);e.target.value=""};
 
 $("saveBtn").onclick=()=>{const w=Number($("weightInput").value);if(!w||w<=0||w>500){$("weightInput").focus();return}const d=today(),r=records.find(x=>x.date===d);if(r)r.weight=w;else records.push({date:d,weight:w});records.sort((a,b)=>a.date.localeCompare(b.date));saveAll();$("weightInput").value="";render()};
