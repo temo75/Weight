@@ -60,6 +60,7 @@
   <div class="section-head"><div><div class="title">⚖️ დღევანდელი აწონვა</div><div class="muted">ერთი ჩანაწერი თითო დღეზე</div></div></div>
   <input id="weightInput" type="text" inputmode="decimal" autocomplete="off" placeholder="შეიყვანე წონა">
   <button class="btn" id="saveBtn">შენახვა</button>
+  <button class="btn" id="confirmScanBtn" style="display:none">✅ დადასტურება და შენახვა</button>
 </section>
 
 <section class="card">
@@ -490,11 +491,13 @@ document.addEventListener("click",e=>{
 
 $("scalePhoto").onchange=e=>{const file=e.target.files?.[0];if(file)scanScalePhoto(file);e.target.value=""};
 
+
 $("saveBtn").onclick=()=>{
  const raw=String($("weightInput").value||"").trim(),w=Number(raw.replace(",","."));if(!/^\d{1,3}(?:[.,]\d{1,2})?$/.test(raw)||!Number.isFinite(w)||w<=0||w>500){$("weightInput").focus();return}
  const d=today(),r=records.find(x=>x.date===d);if(r){r.weight=w;r.weightRaw=raw}else records.push({date:d,weight:w,weightRaw:raw});
  records.sort((a,b)=>a.date.localeCompare(b.date));saveAll();$("weightInput").value="";render()
 };
+$("confirmScanBtn").onclick=()=>{$("saveBtn").click();$("confirmScanBtn").style.display="none"};
 $("settingsBtn").onclick=()=>{const g=Number($("goalInput").value),h=Number($("heightInput").value);settings.goal=g>0?g:null;settings.height=h>=100?h:null;saveAll();render()};
 $("history").onclick=e=>{const b=e.target.closest("[data-del]");if(!b)return;if(confirm("ამ ჩანაწერის წაშლა?")){records=records.filter(r=>r.date!==b.dataset.del);saveAll();render()}};
 document.querySelectorAll("[data-range]").forEach(b=>b.onclick=()=>{range=b.dataset.range;document.querySelectorAll("[data-range]").forEach(x=>x.classList.remove("active"));b.classList.add("active");draw()});
