@@ -461,10 +461,7 @@ async function scanScalePhoto(file){
       $("scanPreview").style.display="none";
       $("scanStatus").textContent="⚠️ რიცხვი ზუსტად ვერ დავადასტურე — ფოტო უარყოფილია. თავიდან გადაიღე.";
 
-      setTimeout(()=>{
-        $("scanStatus").textContent="";
-        openCamera();
-      },900);
+      $("scanStatus").textContent="⚠️ რიცხვი ვერ დადასტურდა — ჩარჩოში სწორად მოაქციე LCD და ისევ დააჭირე „გადაღება“.";
       return;
     }
 
@@ -472,6 +469,7 @@ async function scanScalePhoto(file){
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
     $("scanStatus").textContent="✅ 7-segment OCR-ით დადასტურებულია: "+fmt(w)+" კგ";
+    closeCamera();
     $("scanPreview").style.display="none";
     $("scanResult").style.display="none";
     $("scanImage").removeAttribute("src");
@@ -487,10 +485,7 @@ async function scanScalePhoto(file){
     $("scanPreview").style.display="none";
     $("scanStatus").textContent="⚠️ რიცხვი ვერ დადასტურდა — თავიდან გადაიღე.";
 
-    setTimeout(()=>{
-      $("scanStatus").textContent="";
-      openCamera();
-    },900);
+    $("scanStatus").textContent="⚠️ ამოცნობის მოდული ვერ დაასრულა შემოწმება — კამერა არ ითიშება. ისევ დააჭირე „გადაღება“.";
   }
 }
 
@@ -537,7 +532,7 @@ $("captureCameraBtn").onclick=()=>{
   cv.width=Math.max(900,Math.round(sw*2));
   cv.height=Math.max(350,Math.round(sh*2));
   cv.getContext("2d").drawImage(video,sx,sy,sw,sh,0,0,cv.width,cv.height);
-  cv.toBlob(blob=>{closeCamera();scanScalePhoto(blob)},"image/jpeg",.97);
+  cv.toBlob(blob=>{scanScalePhoto(blob)},"image/jpeg",.97);
 };
 $("scalePhoto").onchange=e=>{const file=e.target.files?.[0];if(file)scanScalePhoto(file);e.target.value=""};
 
