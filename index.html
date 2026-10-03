@@ -219,213 +219,49 @@ async function loadOCR(){
 */
 function readScaleDisplayDirect(img){
   try{
-    const W=1000,H=400;
-    const cv=document.createElement("canvas");
-    cv.width=W;cv.height=H;
-    const g=cv.getContext("2d",{willReadFrequently:true});
-    g.drawImage(img,0,0,W,H);
-
-    const src=g.getImageData(0,0,W,H).data;
-    const gray=new Uint8Array(W*H);
-    for(let i=0,p=0;i<src.length;i+=4,p++){
-      gray[p]=Math.round(.299*src[i]+.587*src[i+1]+.114*src[i+2]);
+    const W=900,H=420,canvas=document.createElement("canvas");canvas.width=W;canvas.height=H;
+    const cx=canvas.getContext("2d",{willReadFrequently:true});cx.drawImage(img,0,0,W,H);
+    const rgba=cx.getImageData(0,0,W,H).data,gray=new Uint8Array(W*H),hist=new Uint32Array(256);
+    for(let i=0,p=0;i<rgba.length;i+=4,p++){const v=Math.round(.299*rgba[i]+.587*rgba[i+1]+.114*rgba[i+2]);gray[p]=v;hist[v]++}
+    const percentile=q=>{const target=W*H*q;let n=0;for(let i=0;i<256;i++){n+=hist[i];if(n>=target)return i}return 255};
+    const lo=percentile(.10),mid=percentile(.50),hi=percentile(.90);if(hi-lo<18)return null;
+    const thresholds=[lo+(mid-lo)*.45,lo+(mid-lo)*.68,mid+(hi-mid)*.35];
+    const patterns={"1111110":"0","0110000":"1","1101101":"2","1111001":"3","0110011":"4","1011011":"5","1011111":"6","1110000":"7","1111111":"8","1111011":"9"};
+    const segs=[[.20,.03,.80,.17],[.72,.12,.94,.47],[.72,.53,.94,.88],[.20,.83,.80,.97],[.06,.53,.28,.88],[.06,.12,.28,.47],[.20,.42,.80,.58]],clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+    function classify(threshold,invert){
+      const x0=Math.round(W*.025),x1=Math.round(W*.975),y0=Math.round(H*.025),y1=Math.round(H*.975),rw=x1-x0,rh=y1-y0;
+      const bin=new Uint8Array(rw*rh);let minX=rw,maxX=-1,minY=rh,maxY=-1;
+      for(let y=0;y<rh;y++)for(let x=0;x<rw;x++){const active=invert?gray[(y+y0)*W+x+x0]>=threshold:gray[(y+y0)*W+x+x0]<=threshold;if(active){bin[y*rw+x]=1;minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y)}}
+      if(maxX<0||maxY-minY<rh*.15)return null;
+      const pad=Math.round((maxY-minY)*.08),top=Math.max(0,minY-pad),bottom=Math.min(rh-1,maxY+pad),height=bottom-top+1,projection=new Uint16Array(rw);
+      for(let x=minX;x<=maxX;x++)for(let y=top;y<=bottom;y++)projection[x]+=bin[y*rw+x];
+      const active=new Uint8Array(rw),minimum=Math.max(1,Math.round(height*.02));for(let x=minX;x<=maxX;x++)active[x]=projection[x]>=minimum?1:0;
+      const gapMax=Math.max(1,Math.round(height*.04));for(let x=minX;x<=maxX;){if(active[x]){x++;continue}const a=x;while(x<=maxX&&!active[x])x++;if(a>minX&&x<=maxX&&x-a<=gapMax)for(let k=a;k<x;k++)active[k]=1}
+      const runs=[];let start=-1;for(let x=minX;x<=maxX+1;x++){if(x<=maxX&&active[x]&&start<0)start=x;if((x>maxX||!active[x])&&start>=0){if(x-start>=height*.09)runs.push({a:start,b:x-1});start=-1}}
+      const glyphs=[],dots=[];
+      for(const run of runs){let ya=bottom,yb=top,count=0;for(let x=run.a;x<=run.b;x++)for(let y=top;y<=bottom;y++)if(bin[y*rw+x]){ya=Math.min(ya,y);yb=Math.max(yb,y);count++}const gh=yb-ya+1,gw=run.b-run.a+1;
+        if(gh>=height*.48&&gw>=height*.09&&gw<=height*.92)glyphs.push({...run,ya,yb,gh,gw});
+        else if(gh>=height*.025&&gh<=height*.30&&gw>=height*.02&&gw<=height*.32&&yb>top+height*.53&&count>=3)dots.push({x:(run.a+run.b)/2,y:(ya+yb)/2});
+      }
+      if(glyphs.length<2||glyphs.length>6)return null;glyphs.sort((a,b)=>a.a-b.a);
+      const sortedWidths=glyphs.map(g=>g.gw).sort((a,b)=>a-b),typical=sortedWidths[Math.floor(sortedWidths.length/2)];
+      if(glyphs.some(g=>g.gw<typical*.40||g.gw>typical*1.85))return null;
+      let digits="",quality=1;
+      for(const glyph of glyphs){const width=Math.max(glyph.gw,typical),xa=clamp(Math.round((glyph.a+glyph.b-width)/2),minX,maxX),xb=clamp(xa+width,minX,maxX),ya=Math.max(top,glyph.ya),yb=Math.min(bottom,glyph.yb),gw=xb-xa+1,gh=yb-ya+1,strength=[];
+        for(const [sx,sy,ex,ey] of segs){let on=0,total=0;const ax=clamp(xa+Math.round(gw*sx),0,rw-1),bx=clamp(xa+Math.round(gw*ex),0,rw-1),ay=clamp(ya+Math.round(gh*sy),0,rh-1),by=clamp(ya+Math.round(gh*ey),0,rh-1);for(let y=ay;y<=by;y++)for(let x=ax;x<=bx;x++){total++;if(bin[y*rw+x])on++}strength.push(on/Math.max(1,total))}
+        let digit=null,best=Infinity,next=Infinity;for(const [pattern,value] of Object.entries(patterns)){let score=0;for(let i=0;i<7;i++)score+=pattern[i]==="1"?Math.max(0,.24-strength[i]):Math.max(0,strength[i]-.20);if(score<best){next=best;best=score;digit=value}else if(score<next)next=score}
+        if(best>.82||next-best<.035)return null;quality=Math.min(quality,Math.max(0,1-best/1.4));digits+=digit;
+      }
+      let point=0;for(const dot of dots)for(let i=0;i<glyphs.length-1;i++){const left=glyphs[i],right=glyphs[i+1],space=right.a-left.b;if(space>typical*.08&&dot.x>left.b+space*.12&&dot.x<right.a-space*.12&&dot.y>top+height*.53){if(point)return null;point=i+1}}
+      const text=point?digits.slice(0,point)+"."+digits.slice(point):digits;if(!/^\d{2,3}(?:\.\d{1,2})?$/.test(text))return null;
+      const number=Number(text);return Number.isFinite(number)&&number>=1&&number<=300?{number,raw:text,quality}:null;
     }
-
-    const values=Array.from(gray);
-    values.sort((a,b)=>a-b);
-    const hi=values[Math.floor(values.length*.965)];
-    const lo=values[Math.floor(values.length*.065)];
-
-    const variants=[
-      {name:"bright",test:v=>v>=Math.max(185,hi)},
-      {name:"dark",test:v=>v<=Math.min(150,lo+35)}
-    ];
-
-    const patterns={
-      "1111110":"0","0110000":"1","1101101":"2","1111001":"3",
-      "0110011":"4","1011011":"5","1011111":"6","1110000":"7",
-      "1111111":"8","1111011":"9"
-    };
-
-    const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-    const segDefs=[
-      [0.22,0.04,0.78,0.18], // a
-      [0.70,0.12,0.92,0.48], // b
-      [0.70,0.52,0.92,0.88], // c
-      [0.22,0.82,0.78,0.96], // d
-      [0.08,0.52,0.30,0.88], // e
-      [0.08,0.12,0.30,0.48], // f
-      [0.22,0.43,0.78,0.57]  // g
-    ];
-
-    let best=null;
-
-    for(const variant of variants){
-      // The LCD digits occupy the middle part of the captured focus-frame.
-      const x0=Math.round(W*.16),x1=Math.round(W*.84);
-      const y0=Math.round(H*.18),y1=Math.round(H*.76);
-      const rw=x1-x0,rh=y1-y0;
-
-      const binary=new Uint8Array(rw*rh);
-      for(let y=0;y<rh;y++){
-        for(let x=0;x<rw;x++){
-          binary[y*rw+x]=variant.test(gray[(y+y0)*W+(x+x0)])?1:0;
-        }
-      }
-
-      // Vertical projection. Digit strokes produce persistent occupied columns.
-      const col=new Uint16Array(rw);
-      for(let x=0;x<rw;x++){
-        let n=0;
-        for(let y=0;y<rh;y++)n+=binary[y*rw+x];
-        col[x]=n;
-      }
-
-      // Require at least 2 active pixels; merge tiny gaps caused by glare.
-      const active=new Uint8Array(rw);
-      for(let x=0;x<rw;x++)active[x]=col[x]>=2?1:0;
-
-      for(let pass=0;pass<2;pass++){
-        for(let x=1;x<rw-1;x++){
-          if(!active[x]&&active[x-1]&&active[x+1])active[x]=1;
-        }
-      }
-
-      const groups=[];
-      let st=-1;
-      for(let x=0;x<rw;x++){
-        if(active[x]&&st<0)st=x;
-        if((!active[x]||x===rw-1)&&st>=0){
-          const en=(active[x]?x:x-1);
-          if(en-st+1>=3)groups.push({a:st,b:en});
-          st=-1;
-        }
-      }
-
-      // Merge groups that belong to the same digit (e.g. split vertical strokes).
-      const merged=[];
-      for(const gr of groups){
-        const prev=merged[merged.length-1];
-        if(prev && gr.a-prev.b<=5)prev.b=gr.b;
-        else merged.push({...gr});
-      }
-
-      // Decimal dot is short; digits are much taller.
-      const candidates=[];
-      const dots=[];
-      for(const gr of merged){
-        let top=rh,bottom=-1,count=0;
-        for(let x=gr.a;x<=gr.b;x++){
-          for(let y=0;y<rh;y++){
-            if(binary[y*rw+x]){
-              count++;
-              if(y<top)top=y;
-              if(y>bottom)bottom=y;
-            }
-          }
-        }
-        const h=bottom-top+1;
-        if(h>=Math.round(rh*.28) && count>=25){
-          candidates.push(gr);
-        }else if(h>=3 && h<=Math.round(rh*.24) && count>=8){
-          dots.push({...gr,center:(gr.a+gr.b)/2});
-        }
-      }
-
-      if(candidates.length<4)continue;
-
-      // Keep the four strongest/tallest digit groups.
-      candidates.sort((a,b)=>a.a-b.a);
-      if(candidates.length>4){
-        candidates.splice(4);
-      }
-      if(candidates.length!==4)continue;
-
-      const centers=candidates.map(g=>(g.a+g.b)/2);
-      const gaps=[];
-      for(let i=1;i<centers.length;i++)gaps.push(centers[i]-centers[i-1]);
-      const normalGap=gaps.slice().sort((a,b)=>a-b)[Math.floor(gaps.length/2)]||1;
-
-      let text="";
-      let confidence=1;
-      let valid=true;
-
-      for(let di=0;di<4;di++){
-        const center=centers[di];
-        const cellW=clamp(normalGap*.82,45,150);
-        const xa=Math.round(center-cellW/2);
-        const xb=Math.round(center+cellW/2);
-        const ya=0,yb=rh;
-
-        const bits=[];
-        for(const [sx,sy,ex,ey] of segDefs){
-          const ax=clamp(Math.round(xa+(xb-xa)*sx),0,rw-1);
-          const bx=clamp(Math.round(xa+(xb-xa)*ex),0,rw-1);
-          const ay=clamp(Math.round(ya+(yb-ya)*sy),0,rh-1);
-          const by=clamp(Math.round(ya+(yb-ya)*ey),0,rh-1);
-
-          let on=0,total=0;
-          for(let yy=ay;yy<=by;yy++){
-            for(let xx=ax;xx<=bx;xx++){
-              total++;
-              if(binary[yy*rw+xx])on++;
-            }
-          }
-          bits.push((on/Math.max(1,total))>.10?1:0);
-        }
-
-        const pattern=bits.join("");
-        const digit=patterns[pattern];
-
-        if(digit===undefined){
-          valid=false;
-          break;
-        }
-
-        text+=digit;
-
-        // Compare segment strength to expected on/off state for confidence.
-        const expected=pattern;
-        let strong=0;
-        for(const ch of expected)if(ch==="1")strong++;
-        confidence*=strong/7;
-      }
-
-      if(!valid)continue;
-
-      // Decimal: choose a small dot between digit 2 and 3 first, then 3 and 4.
-      let decimalAfter=0;
-      for(const d of dots){
-        const dc=d.center;
-        if(dc>centers[1]+normalGap*.20 && dc<centers[2]-normalGap*.20){
-          decimalAfter=2;break;
-        }
-        if(dc>centers[2]+normalGap*.20 && dc<centers[3]-normalGap*.20){
-          decimalAfter=3;
-        }
-      }
-
-      let number;
-      if(decimalAfter===2)number=Number(text.slice(0,2)+"."+text.slice(2));
-      else if(decimalAfter===3)number=Number(text.slice(0,3)+"."+text.slice(3));
-      else number=Number(text);
-
-      if(!Number.isFinite(number)||number<1||number>300)continue;
-
-      // Require four recognized digits and a sensible segment pattern.
-      const score=Math.min(1,0.80+confidence*.20);
-      if(!best||score>best.score){
-        best={number,raw:text,score,decimalAfter,variant:variant.name};
-      }
-    }
-
-    return best;
-  }catch(e){
-    console.warn("direct seven-segment reader",e);
-    return null;
-  }
+    const votes=[];for(const t of thresholds)for(const inv of [false,true]){const v=classify(t,inv);if(v)votes.push(v)}
+    const tally=new Map();for(const v of votes){const k=v.number.toFixed(2);tally.set(k,(tally.get(k)||0)+1)}
+    const winner=[...tally].sort((a,b)=>b[1]-a[1])[0];if(!winner||winner[1]<2)return null;
+    const v=votes.find(x=>x.number.toFixed(2)===winner[0]);return {...v,agreement:winner[1]};
+  }catch(e){console.warn("seven-segment recognition",e);return null}
 }
-
 function normalizeSevenOCR(text){
   return String(text||"")
     .replace(/,/g,".")
@@ -554,170 +390,24 @@ function makeTightSevenSegmentCrops(img){
 }
 
 async function scanScalePhoto(file){
-  $("scanPreview").style.display="block";
-  $("scanResult").style.display="none";
-  recognizedScanWeight=null;
-  $("scanImage").src=URL.createObjectURL(file);
-  $("scanStatus").textContent="🔎 ვეძებ მხოლოდ სასწორის 7-segment ციფრებს...";
-
-  let imgURL=null;
-
+  let url=null;
   try{
-    const img=await new Promise((resolve,reject)=>{
-      const im=new Image();
-      im.onload=()=>resolve(im);
-      im.onerror=reject;
-      imgURL=URL.createObjectURL(file);
-      im.src=imgURL;
-    });
-
-    /*
-      We now use TWO independent readers:
-      A dedicated seven-segment trained Tesseract model is used.
-      Generic English OCR is not used.
-      A single guess is NEVER accepted.
-    */
-    const votes=[];
-
-    // First try the local seven-segment reader. A clear LCD is accepted immediately.
-    const direct=readScaleDisplayDirect(img);
-    if(direct && direct.score>=0.94){
-      const exact=direct.number;
-      $("scanStatus").textContent="✅ ეკრანი ზუსტად ამოვიკითხე: "+exact+" — ვინახავ...";
-      $("weightInput").value=String(exact);
-      $("saveBtn").click();
-
-      $("scanImage").removeAttribute("src");
-      $("scanPreview").style.display="none";
-      $("scanResult").style.display="none";
-      closeCamera();
-      return;
-    }
-
-    const worker=await loadOCR();
-    const prepared=makeSevenSegmentOCRImages(img);
-    const tight=makeTightSevenSegmentCrops(img);
-    const allImages=[...prepared.map(x=>x.image),...tight];
-
-    let pass=0;
-
-    for(const image of allImages){
-      for(const psm of [7,8,13]){
-        pass++;
-        $("scanStatus").textContent="📖 ვამოწმებ სასწორის ციფრებს... "+pass+"/"+(allImages.length*3);
-
-        await worker.setParameters({
-          tessedit_pageseg_mode:psm,
-          tessedit_char_whitelist:"0123456789.,",
-          preserve_interword_spaces:"0",
-          classify_bln_numeric_mode:"1",
-          load_number_dawg:"0",
-          load_freq_dawg:"0",
-          load_system_dawg:"0"
-        });
-
-        const result=await worker.recognize(image);
-        const raw=String(result.data?.text||"");
-        const n=parseSevenOCR(raw);
-
-        if(n!==null){
-          votes.push({
-            value:n,
-            source:"trained-ocr",
-            key:"ocr-"+pass,
-            confidence:Number(result.data?.confidence)||0
-          });
-        }
-      }
-    }
-
-    if(imgURL)URL.revokeObjectURL(imgURL);
-
-    /*
-      Count independent OCR variants.
-      The same wrong number appearing once is rejected.
-      For an automatic acceptance we require at least THREE independent
-      trained-OCR passes to agree, OR a segment-reader vote plus TWO
-      trained-OCR passes agreeing with it.
-    */
-    const groups={};
-
-    for(const v of votes){
-      const k=v.value.toFixed(1);
-      if(!groups[k]){
-        groups[k]={
-          value:v.value,
-          trained:0,
-          segment:false,
-          confidence:0,
-          keys:new Set()
-        };
-      }
-      groups[k].keys.add(v.key);
-      if(v.source==="trained-ocr"){
-        groups[k].trained++;
-        groups[k].confidence+=v.confidence||0;
-      }else{
-        groups[k].segment=true;
-      }
-    }
-
-    const ranked=Object.values(groups).sort((a,b)=>
-      (b.trained-a.trained) ||
-      (Number(b.segment)-Number(a.segment)) ||
-      (b.confidence-a.confidence)
-    );
-
-    const best=ranked[0];
-
-    if(!best ||
-       best.trained<4 ||
-       best.keys.size<4){
-      /*
-        Nothing is trusted.
-        Remove the photo immediately and send the user back to the camera.
-      */
-      recognizedScanWeight=null;
-      $("weightInput").value="";
-      $("scanResult").style.display="none";
-      $("scanImage").removeAttribute("src");
-      $("scanPreview").style.display="none";
-      $("scanStatus").textContent="⚠️ რიცხვი ზუსტად ვერ დავადასტურე — ფოტო უარყოფილია. თავიდან გადაიღე.";
-
-      $("scanStatus").textContent="⚠️ რიცხვი ვერ დადასტურდა — ჩარჩოში სწორად მოაქციე LCD და ისევ დააჭირე „გადაღება“.";
-      return;
-    }
-
-    const w=Math.round(best.value*10)/10;
-    recognizedScanWeight=w;
-    $("weightInput").value=fmt(w);
-    $("scanStatus").textContent="✅ ზუსტად ამოვიცანი: "+fmt(w)+" კგ — ვინახავ მონაცემს...";
-    
-    // Automatic workflow: recognize → save today's record → refresh dashboard.
+    const img=await new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;url=URL.createObjectURL(file);im.src=url});
+    if(url){URL.revokeObjectURL(url);url=null}
+    if(!cameraStream)return;
+    const found=readScaleDisplayDirect(img);
+    if(!found||found.agreement<2||found.quality<.38){lastScaleCandidate=null;$("scanStatus").textContent="🔎 LCD ვერ დავადასტურე — კამერა აგრძელებს ძებნას...";return}
+    const key=found.number.toFixed(2);
+    if(lastScaleCandidate&&lastScaleCandidate.key===key)lastScaleCandidate.count++;
+    else lastScaleCandidate={key,count:1};
+    if(lastScaleCandidate.count<2){$("scanStatus").textContent="🔎 ვამოწმებ წაკითხვას: "+found.raw+"...";return}
+    const weight=Number(key);recognizedScanWeight=weight;$("weightInput").value=String(weight);
+    $("scanStatus").textContent="✅ დადასტურებულია: "+found.raw+" კგ — ვინახავ...";
     $("saveBtn").click();
-
-    // Remove the temporary photo and close the camera only after the data is saved.
-    $("scanImage").removeAttribute("src");
-    $("scanPreview").style.display="none";
-    $("scanResult").style.display="none";
-    closeCamera();
-
-  }catch(e){
-    console.error("scale OCR",e);
-    if(imgURL)URL.revokeObjectURL(imgURL);
-
-    recognizedScanWeight=null;
-    $("weightInput").value="";
-    $("scanResult").style.display="none";
-    $("scanImage").removeAttribute("src");
-    $("scanPreview").style.display="none";
-    $("scanStatus").textContent="⚠️ რიცხვი ვერ დადასტურდა — თავიდან გადაიღე.";
-
-    $("scanStatus").textContent="⚠️ ამოცნობის მოდული ვერ დაასრულა შემოწმება — კამერა არ ითიშება. ისევ დააჭირე „გადაღება“.";
-  }
+    $("scanImage").removeAttribute("src");$("scanPreview").style.display="none";$("scanResult").style.display="none";closeCamera();
+  }catch(e){if(url)URL.revokeObjectURL(url);console.warn("scale frame",e);if(cameraStream)$("scanStatus").textContent="🔎 კადრი ვერ დამუშავდა — კამერა აგრძელებს ძებნას..."}
 }
-
-let cameraStream=null,cameraTrack=null;
+let cameraStream=null,cameraTrack=null,lastScaleCandidate=null;
 let autoScanTimer=null,autoScanBusy=false;
 
 function captureCurrentCameraFrame(){
