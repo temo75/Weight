@@ -111,7 +111,6 @@
 <div class="footer">TEMO WEIGHT • შენი ყოველდღიური პროგრესი</div>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
 const KEY="temo_weight_v2",SET="temo_weight_settings_v1";
 let recognizedScanWeight=null;
@@ -155,126 +154,207 @@ function render(){
  const h=$("history");if(!records.length)h.innerHTML='<div class="empty">ჯერ არცერთი ჩანაწერი არ არის.</div>';else h.innerHTML=records.slice().reverse().map((r,k)=>{let j=records.length-1-k,p=j>0?r.weight-records[j-1].weight:null,cl=p===null?"":p<0?"green":p>0?"red":"";return '<div class="row"><div><div class="rdate">'+dateText(r.date)+'</div><div class="small">'+r.date+'</div></div><div class="rw">'+fmt(r.weight)+' კგ</div><div class="chg '+cl+'">'+(p===null?"—":signed(p))+'</div><button class="del" data-del="'+r.date+'">×</button></div>'}).join("");
  renderCalendar();draw()
 }
-let ocrWorker=null;
+/*
+  Local seven-segment reader.
+  Based on the open-source seven-seg-ocr approach:
+  gradient edge digit detection + 3x3 zone signatures + correlation.
+  No Tesseract and no network/API call for scale photos.
+*/
+const SEVEN_ZONES=["TL","TC","TR","ML","MC","MR","BL","BC","BR"];
+const SEVEN_DIGITS=["0","1","2","3","4","5","6","7","8","9"];
+const SEVEN_SIG={
+ "0":[.7,1,.7,.7,.15,.7,.7,1,.7],
+ "1":[.1,.1,.7,.1,.1,.7,.1,.1,.7],
+ "2":[.15,1,.7,.2,1,.5,.7,1,.15],
+ "3":[.15,1,.7,.2,1,.7,.15,1,.7],
+ "4":[.7,.3,.7,.7,1,.7,.1,.2,.7],
+ "5":[.7,1,.15,.7,1,.7,.1,1,.7],
+ "6":[.7,1,.15,.7,1,.5,.7,1,.7],
+ "7":[.1,1,.7,.1,.1,.7,.1,.1,.7],
+ "8":[.7,1,.7,.7,1,.7,.7,1,.7],
+ "9":[.7,1,.7,.7,1,.7,.1,1,.7]
+};
 
-async function getOCRWorker(){
- if(ocrWorker)return ocrWorker;
- if(!window.Tesseract)throw new Error("OCR library unavailable");
- ocrWorker=await Tesseract.createWorker("eng",1,{logger:m=>{
-   if(m.status==="recognizing text"&&Number.isFinite(m.progress))
-     $("scanStatus").textContent="🔎 სასწორის ციფრებს ვკითხულობ... "+Math.round(m.progress*100)+"%";
- }});
- await ocrWorker.setParameters({
-   tessedit_char_whitelist:"0123456789.",
-   preserve_interword_spaces:"1"
- });
- return ocrWorker;
+function sevenGrayFromCanvas(cv){
+ const w=cv.width,h=cv.height,c=cv.getContext("2d",{willReadFrequently:true});
+ const d=c.getImageData(0,0,w,h).data,g=new Float32Array(w*h);
+ for(let i=0,p=0;i<d.length;i+=4,p++)g[p]=(0.299*d[i]+0.587*d[i+1]+0.114*d[i+2])/255;
+ return {g,w,h};
 }
 
-function fileToDataUrl(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result||""));r.onerror=reject;r.readAsDataURL(file)})}
-
-function makeOCRCrops(dataUrl){
- return new Promise((resolve,reject)=>{
-   const img=new Image();
-   img.onload=()=>{
-     const W=img.naturalWidth,H=img.naturalHeight;
-     const specs=[
-       [0.15,0.25,0.70,0.45],
-       [0.22,0.30,0.56,0.36],
-       [0.28,0.34,0.44,0.30],
-       [0.00,0.00,1.00,1.00]
-     ];
-     const out=specs.map(([x,y,w,h])=>{
-       const sx=Math.round(W*x),sy=Math.round(H*y),sw=Math.round(W*w),sh=Math.round(H*h);
-       const scale=Math.min(3,Math.max(2,1800/Math.max(sw,sh)));
-       const cv=document.createElement("canvas");
-       cv.width=Math.round(sw*scale);cv.height=Math.round(sh*scale);
-       const c=cv.getContext("2d",{willReadFrequently:true});
-       c.imageSmoothingEnabled=true;
-       c.drawImage(img,sx,sy,sw,sh,0,0,cv.width,cv.height);
-       const px=c.getImageData(0,0,cv.width,cv.height),d=px.data;
-       for(let i=0;i<d.length;i+=4){
-         const g=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
-         const v=g>145?255:0;
-         d[i]=d[i+1]=d[i+2]=v;
-       }
-       c.putImageData(px,0,0);
-       return cv.toDataURL("image/png");
-     });
-     resolve(out);
-   };
-   img.onerror=reject;
-   img.src=dataUrl;
- });
+function sevenDetectPositions(g,w,h,y,dh,windowW=42){
+ const y1=Math.max(0,y),y2=Math.min(h,y+dh);
+ const proj=new Float32Array(w);
+ for(let x=0;x<w;x++){let sum=0;for(let yy=y1;yy<y2;yy++)sum+=g[yy*w+x];proj[x]=sum/Math.max(1,y2-y1)}
+ const sm=new Float32Array(w);
+ for(let x=1;x<w-1;x++)sm[x]=(proj[x-1]+proj[x]+proj[x+1])/3;
+ const grad=new Float32Array(w);
+ for(let x=1;x<w-1;x++)grad[x]=sm[x+1]-sm[x-1];
+ const left=[],right=[];
+ for(let x=3;x<w-3;x++){
+   if(grad[x]>.006&&grad[x]>=grad[x-1]&&grad[x]>=grad[x+1]&&grad[x]>=grad[x-2]&&grad[x]>=grad[x+2])left.push([x,grad[x]]);
+   if(grad[x]<-.006&&grad[x]<=grad[x-1]&&grad[x]<=grad[x+1]&&grad[x]<=grad[x-2]&&grad[x]<=grad[x+2])right.push([x,-grad[x]]);
+ }
+ left.sort((a,b)=>b[1]-a[1]);
+ const used=new Set(),pairs=[];
+ for(const [lx] of left){
+   let best=null;
+   for(const [rx,str] of right){
+     if(used.has(rx))continue;
+     const ww=rx-lx;
+     if(ww>=Math.max(18,windowW*.35)&&ww<=windowW*1.25){
+       if(!best||ww<best[1])best=[rx,ww,str];
+     }
+   }
+   if(best){used.add(best[0]);pairs.push([lx,best[0],best[1]]);}
+ }
+ pairs.sort((a,b)=>a[0]-b[0]);
+ const filtered=[];
+ for(const p of pairs){
+   if(!filtered.length||p[0]-(filtered.at(-1)[0]+filtered.at(-1)[2])<windowW*.8)filtered.push(p);
+ }
+ if(filtered.length<3)return [];
+ // Try contiguous groups of exactly three, preferring similar widths and spacing.
+ const groups=[];
+ for(let i=0;i<=filtered.length-3;i++){
+   const q=filtered.slice(i,i+3), widths=q.map(p=>p[2]),avg=widths.reduce((a,b)=>a+b,0)/3;
+   const gaps=[q[1][0]-q[0][1],q[2][0]-q[1][1]];
+   const gapDiff=Math.abs(gaps[0]-gaps[1]);
+   const widthDiff=Math.max(...widths)-Math.min(...widths);
+   groups.push({q,score:avg-gapDiff*.7-widthDiff*.5});
+ }
+ groups.sort((a,b)=>b.score-a.score);
+ const q=groups[0]?.q;
+ if(!q)return [];
+ return q.map(p=>({x:Math.max(0,Math.round((p[0]+p[1])/2-windowW/2)),w:Math.min(windowW,w-Math.max(0,Math.round((p[0]+p[1])/2-windowW/2)))}));
 }
 
-function extractWeightCandidates(data){
+function sevenZones(g,w,h,x,y,dw,dh){
  const out=[];
- const add=(text,confidence=0,area=0)=>{
-   String(text||"").replace(/,/g,".").split(/\s+/).forEach(t=>{
-     t=t.replace(/[^0-9.]/g,"");
-     if(!/^\d{1,3}(?:\.\d{1,2})?$/.test(t))return;
-     const n=Number(t);
-     if(Number.isFinite(n)&&n>0&&n<=500)
-       out.push({raw:t,number:n,confidence:Number(confidence)||0,area:Number(area)||0});
-   });
- };
- if(data?.words)data.words.forEach(w=>{
-   const area=(Number(w?.bbox?.x1)-Number(w?.bbox?.x0))*(Number(w?.bbox?.y1)-Number(w?.bbox?.y0));
-   add(w?.text,w?.confidence,area);
- });
- add(data?.text,0,0);
+ const zw=Math.max(1,Math.floor(dw/3)),zh=Math.max(1,Math.floor(dh/3));
+ for(let i=0;i<9;i++){
+   const row=Math.floor(i/3),col=i%3;
+   const x1=Math.max(0,x+col*zw),x2=Math.min(w,x+(col===2?dw:(col+1)*zw));
+   const y1=Math.max(0,y+row*zh),y2=Math.min(h,y+(row===2?dh:(row+1)*zh));
+   let sum=0,n=0;
+   for(let yy=y1;yy<y2;yy++)for(let xx=x1;xx<x2;xx++){sum+=g[yy*w+xx];n++}
+   out.push(n?sum/n:0);
+ }
  return out;
 }
 
-function chooseOCRWeight(results){
- const all=results.flat();
- const unique=[...new Map(all.map(x=>[x.raw,x])).values()];
- if(!unique.length)return null;
-
- // The scale display normally contains a decimal value; prefer it over
- // isolated integers from printed specifications on the scale.
- const decimal=unique.filter(x=>x.raw.includes("."));
- if(decimal.length){
-   decimal.sort((a,b)=>(b.confidence-a.confidence)||(b.area-a.area));
-   return decimal[0];
+function sevenClassify(z){
+ const mn=Math.min(...z),mx=Math.max(...z);
+ if(mx-mn<.035)return {char:"?",score:0};
+ const oc=z.reduce((a,b)=>a+b,0)/9;
+ const on=z.map(v=>v-oc),onorm=Math.sqrt(on.reduce((a,b)=>a+b*b,0));
+ let best={char:"?",score:-99};
+ for(const ch of SEVEN_DIGITS){
+   const e=SEVEN_SIG[ch],ec=e.reduce((a,b)=>a+b,0)/9,ev=e.map(v=>v-ec);
+   const enorm=Math.sqrt(ev.reduce((a,b)=>a+b*b,0));
+   let corr=onorm>1e-6?on.reduce((sum,v,i)=>sum+v*ev[i],0)/(onorm*enorm):0;
+   let boost=0;
+   const bc=z[7]>.6,tr=z[2]>.6,tl=z[0]<.35,bl=z[6]>.65,mc=z[4]>.6;
+   if(bc&&e[7]<.3)boost-=.7;else if(bc&&e[7]>.7)boost+=.3;
+   if(tr&&e[2]<.2)boost-=.5;else if(tr&&e[2]>.6)boost+=.2;
+   if(tl&&e[0]>.5)boost-=.3;
+   if(z[0]>.5&&e[0]<.2)boost-=.7;
+   if(z[4]<.3&&e[4]>.5)boost-=.4;
+   if(mc&&e[4]<.2)boost-=.9;
+   if(bl&&e[6]<.2)boost-=.5;else if(bl&&e[6]>.5)boost+=.2;
+   const score=Math.max(-1,Math.min(1,corr+boost));
+   if(score>best.score)best={char:ch,score};
  }
-
- // If OCR misses the decimal point, prefer the largest/most confident
- // number from the central display crops, while rejecting tiny labels.
- const likely=unique.filter(x=>x.number>=20&&x.number<=300);
- if(likely.length){
-   likely.sort((a,b)=>(b.area-a.area)||(b.confidence-a.confidence));
-   return likely[0];
- }
- return null;
+ return best;
 }
-async function recognizeWeightWithOCR(dataUrl){
- const worker=await getOCRWorker();
- const crops=await makeOCRCrops(dataUrl);
- const results=[];
- for(let i=0;i<crops.length;i++){
-   $("scanStatus").textContent="🔎 სასწორის ეკრანს ვკითხულობ... "+(i+1)+"/"+crops.length;
-   await worker.setParameters({tessedit_pageseg_mode:i===2?"7":"6"});
-   const result=await worker.recognize(crops[i]);
-   results.push(extractWeightCandidates(result?.data));
+
+function sevenDot(g,w,h,x1,x2,y,dh){
+ const cx=Math.round((x1+x2)/2),cy=Math.round(y+dh*.84),r=Math.max(4,Math.round(dh*.12));
+ let center=0,n=0,edge=0,en=0;
+ for(let yy=Math.max(0,cy-r);yy<Math.min(h,cy+r+1);yy++)for(let xx=Math.max(0,cx-r);xx<Math.min(w,cx+r+1);xx++){
+   const v=g[yy*w+xx];center=Math.max(center,v);n++;
+   if(Math.abs(xx-cx)>r*.55||Math.abs(yy-cy)>r*.55){edge+=v;en++}
  }
- return chooseOCRWeight(results);
+ return n>0&&center>(edge/Math.max(1,en))*1.25;
+}
+
+function sevenMakeROI(img,box,outW=1000,outH=500){
+ const [x,y,w,h]=box,W=img.naturalWidth,H=img.naturalHeight;
+ const cv=document.createElement("canvas");cv.width=outW;cv.height=outH;
+ cv.getContext("2d").drawImage(img,Math.round(W*x),Math.round(H*y),Math.round(W*w),Math.round(H*h),0,0,outW,outH);
+ return cv;
+}
+
+function sevenReadROI(cv){
+ const {g,w,h}=sevenGrayFromCanvas(cv);
+ const candidates=[];
+ // Search several digit bands; the best 3-digit geometry wins.
+ for(let dh=Math.round(h*.32);dh<=Math.round(h*.70);dh+=Math.max(8,Math.round(h*.09))){
+   for(let y=Math.round(h*.12);y<=Math.round(h*.58);y+=Math.max(8,Math.round(h*.07))){
+     const pos=sevenDetectPositions(g,w,h,y,dh,Math.max(24,Math.round(w*.075)));
+     if(pos.length!==3)continue;
+     const cls=pos.map(p=>sevenClassify(sevenZones(g,w,h,p.x,y,p.w,dh)));
+     if(cls.some(c=>c.char==="?"))continue;
+     const avg=cls.reduce((a,c)=>a+c.score,0)/3;
+     const dot=sevenDot(g,w,h,pos[1].x+pos[1].w,pos[2].x,y,dh);
+     // Weight display expected form is DD.D: decimal between second and third digit.
+     const reading=cls[0].char+cls[1].char+"."+cls[2].char;
+     const num=Number(reading);
+     if(Number.isFinite(num)&&num>=20&&num<=300)candidates.push({reading,num,score:avg,dot});
+   }
+ }
+ if(!candidates.length)return null;
+ candidates.sort((a,b)=>(Number(b.dot)-Number(a.dot))*.25+b.score-(Number(a.dot)-Number(b.dot))*.25-a.score);
+ return candidates[0];
+}
+
+async function recognizeWeightSevenSegment(dataUrl){
+ const img=await new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=dataUrl});
+ // Multiple display-centered ROIs prevent printed scale specifications from competing.
+ const boxes=[
+   [.10,.10,.80,.70],
+   [.16,.16,.68,.58],
+   [.20,.22,.60,.48],
+   [.05,.18,.90,.62]
+ ];
+ const readings=[];
+ for(let i=0;i<boxes.length;i++){
+   $("scanStatus").textContent="🔎 7-segment ეკრანს ვამოწმებ... "+(i+1)+"/"+boxes.length;
+   const r=sevenReadROI(sevenMakeROI(img,boxes[i]));
+   if(r)readings.push(r);
+ }
+ if(!readings.length)return null;
+ const groups={};
+ for(const r of readings){
+   if(!groups[r.reading])groups[r.reading]={...r,count:0};
+   groups[r.reading].count++;
+   groups[r.reading].score+=r.score;
+ }
+ const ranked=Object.values(groups).sort((a,b)=>b.count-a.count||(b.score/a.count)-(a.score/b.count));
+ const best=ranked[0];
+ // Never accept a lone weak guess. At least two ROI/band readings must agree.
+ if(!best||best.count<2||best.score/best.count<.35)return null;
+ return {raw:best.reading,number:best.num};
 }
 
 async function scanScalePhoto(file){
  try{
   const dataUrl=await fileToDataUrl(file);
-  $("scanStatus").textContent="🔎 OCR მზადდება...";
-  const found=await recognizeWeightWithOCR(dataUrl);
-  if(!found){$("scanStatus").textContent="❌ წონა ვერ დაფიქსირდა. გადაიღე ციფრები მკაფიოდ.";return}
+  $("scanStatus").textContent="🔎 სპეციალური 7-segment reader მუშაობს...";
+  const found=await recognizeWeightSevenSegment(dataUrl);
+  if(!found){
+    $("scanStatus").textContent="❌ წონა ვერ დადასტურდა — თავიდან გადაიღე.";
+    recognizedScanWeight=null;
+    return;
+  }
   recognizedScanWeight=found.number;
   $("weightInput").value=found.raw;
-  $("scanStatus").textContent="✅ ფოტო წაკითხულია: "+found.raw+" კგ";
+  $("scanStatus").textContent="✅ 7-segment-ით დადასტურებულია: "+found.raw+" კგ";
   $("saveBtn").click();
- }catch(e){
-  console.warn(e);
-  $("scanStatus").textContent="❌ ფოტოს წაკითხვა ვერ მოხერხდა.";
+}catch(e){
+  console.warn("seven-segment reader",e);
+  recognizedScanWeight=null;
+  $("scanStatus").textContent="❌ წონის წაკითხვა ვერ მოხერხდა.";
  }
 }
 
