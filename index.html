@@ -432,11 +432,6 @@ function parseWeightOCR(text){
  const valid=m.filter(x=>{const n=Number(x);return Number.isFinite(n)&&n>1&&n<=300});if(!valid.length)return null;
  valid.sort((a,b)=>(b.includes(".")-a.includes("."))||(b.length-a.length));return {raw:valid[0],number:Number(valid[0])};
 }
-async function recognizeWeightOCR(canvas){
- const ocr=await loadWeightOCR();$("scanStatus").textContent="🔎 ჩარჩოში მოცემულ რიცხვს ვკითხულობ...";
- const imageData=canvas.toDataURL("image/jpeg",.95); const result=await ocr(imageData,{max_new_tokens:24}),text=Array.isArray(result)?result.map(x=>x.generated_text||"").join(" "):String(result?.generated_text||"");
- return parseWeightOCR(text);
-}
 let cameraStream=null,cameraTrack=null;
 
 async function scanScalePhoto(file){
