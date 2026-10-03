@@ -226,6 +226,55 @@ function makeScaleCrops(file){
     };img.onerror=reject;img.src=url;
   });
 }
+function readSevenSegmentCanvas(source){
+  try{
+    const cv=document.createElement("canvas");
+    const W=source.naturalWidth||source.width,H=source.naturalHeight||source.height;
+    if(!W||!H)return null;
+    cv.width=W;cv.height=H;
+    const g=cv.getContext("2d",{willReadFrequently:true});
+    g.drawImage(source,0,0,W,H);
+    const d=g.getImageData(0,0,W,H).data,gray=new Uint8Array(W*H);
+    for(let i=0,p=0;i<d.length;i+=4,p++)gray[p]=Math.round(.299*d[i]+.587*d[i+1]+.114*d[i+2]);
+    const pct=(a,q)=>{const h=new Uint32Array(256);for(const v of a)h[v]++;let n=0,t=a.length*q;for(let i=0;i<256;i++){n+=h[i];if(n>=t)return i}return 255};
+    const pats={0:"1111110",1:"0110000",2:"1101101",3:"1111001",4:"0110011",5:"1011011",6:"1011111",7:"1110000",8:"1111111",9:"1111011"};
+    const regs=[[.20,.80,0,.16],[.68,.96,.10,.48],[.68,.96,.52,.92],[.20,.80,.84,1],[.04,.32,.52,.92],[.04,.32,.10,.48],[.20,.80,.42,.58]];
+    const out=[];
+    for(const inv of [0,1]){
+      const v=new Uint8Array(W*H);for(let i=0;i<v.length;i++)v[i]=inv?255-gray[i]:gray[i];
+      const th=Math.max(220,Math.min(250,pct(v,.95)-5)),bin=new Uint8Array(W*H);
+      let x0=W,y0=H,x1=-1,y1=-1;
+      for(let y=0;y<H;y++)for(let x=0;x<W;x++){const p=y*W+x;if(v[p]>=th){bin[p]=1;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y}}
+      if(x1<0)continue;
+      const bw=x1-x0+1,bh=y1-y0+1;if(bh<25||bw<60)continue;
+      const n=Math.max(3,Math.min(4,Math.round(bw/(.65*bh)))),sw=bw/n,digs=[];let score=0,ok=true;
+      for(let k=0;k<n;k++){
+        const xa=Math.floor(x0+k*sw),xb=Math.floor(x0+(k+1)*sw)-1;
+        let lx=xa,rx=xb,ty=y0,by=y1,found=false;
+        for(let y=y0;y<=y1;y++)for(let x=xa;x<=xb;x++)if(bin[y*W+x]){if(!found){lx=rx=x;ty=by=y;found=true}else{if(x<lx)lx=x;if(x>rx)rx=x;if(y<ty)ty=y;if(y>by)by=y}}
+        if(!found){ok=false;break}
+        lx=Math.max(xa,lx-3);rx=Math.min(xb,rx+3);ty=Math.max(y0,ty-3);by=Math.min(y1,by+3);
+        const ww=rx-lx+1,hh=by-ty+1,vals=[];for(let y=ty;y<=by;y+=Math.max(1,Math.floor(hh/8)))for(let x=lx;x<=rx;x+=Math.max(1,Math.floor(ww/8)))vals.push(v[y*W+x]);vals.sort((a,b)=>a-b);
+        const bg=vals[Math.floor(vals.length*.25)]||0,bits=[];
+        for(const r of regs){
+          const yy0=ty+Math.floor(r[2]*hh),yy1=Math.min(by+1,Math.max(yy0+1,ty+Math.floor(r[3]*hh))),xx0=lx+Math.floor(r[0]*ww),xx1=Math.min(rx+1,Math.max(xx0+1,lx+Math.floor(r[1]*ww))),z=[];
+          for(let y=yy0;y<yy1;y++)for(let x=xx0;x<xx1;x++)z.push(v[y*W+x]);z.sort((a,b)=>a-b);
+          bits.push((z[Math.floor(z.length*.9)]-bg)>18?1:0);
+        }
+        const sig=bits.join("");let bd=null,dist=99;
+        for(const [dig,pat] of Object.entries(pats)){let dd=0;for(let j=0;j<7;j++)if(sig[j]!==pat[j])dd++;if(dd<dist){dist=dd;bd=dig}}
+        if(dist>1){ok=false;break}digs.push(bd);score+=1-dist/7;
+      }
+      if(!ok)continue;
+      let dot=null;const gy0=Math.floor(y0+bh*.62),gy1=Math.floor(y0+bh*.98);
+      for(let k=1;k<n;k++){let cnt=0,gx0=Math.floor(x0+k*sw-sw*.28),gx1=Math.floor(x0+k*sw+sw*.28);for(let y=gy0;y<=gy1;y++)for(let x=Math.max(x0,gx0);x<=Math.min(x1,gx1);x++)if(bin[y*W+x])cnt++;if(cnt>=6){dot=k;break}}
+      let text=digs.join("");if(dot!==null)text=text.slice(0,dot)+"."+text.slice(dot);else text=text.slice(0,2)+"."+text.slice(2);
+      const num=Number(text);if(Number.isFinite(num)&&num>=30&&num<=250)out.push({number:num,score:score/n});
+    }
+    out.sort((a,b)=>b.score-a.score);return out[0]||null;
+  }catch(e){console.error("seven-segment reader",e);return null}
+}
+
 async function scanScalePhoto(file){
   $("scanPreview").style.display="block";$("scanResult").style.display="none";recognizedScanWeight=null;
   $("scanImage").src=URL.createObjectURL(file);
@@ -236,6 +285,19 @@ async function scanScalePhoto(file){
       const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=URL.createObjectURL(file);
     });
     const W=img.naturalWidth,H=img.naturalHeight;
+    const seven=readSevenSegmentCanvas(img);
+    if(seven && seven.score>=0.84){
+      const w=Math.round(seven.number*100)/100;
+      recognizedScanWeight=w;
+      $("weightInput").value=fmt(w);
+      $("scanStatus").textContent="✅ ზუსტად ამოვიცანი: "+fmt(w)+" კგ";
+      $("scanPreview").style.display="none";
+      $("scanResult").style.display="none";
+      $("scanImage").removeAttribute("src");
+      URL.revokeObjectURL(img.src);
+      return;
+    }
+
     const readings=[];
 
     // One purpose only: OCR the LCD area. Do not let the surrounding scale
