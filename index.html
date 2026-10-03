@@ -295,10 +295,22 @@ async function scanScalePhoto(file){
           const compact=raw.replace(/,/g,".").replace(/\s+/g,"");
 
           let n=null;
-          let m=compact.match(/(^|\D)(\d{2,3})\.(\d)(?!\d)/);
+
+          // Digital scales may show one OR two decimal places:
+          // 87.2 / 87.20 / 88.3 / 88.30
+          let m=compact.match(/(^|\D)(\d{2,3})\.(\d{1,2})(?!\d)/);
           if(m)n=Number(m[2]+"."+m[3]);
 
-          // Seven-segment displays often lose the decimal point in OCR.
+          // If OCR drops the decimal point:
+          // 872 -> 87.2
+          // 8830 -> 88.30
+          if(n===null){
+            m=compact.match(/(^|\D)(\d{4})(?!\d)/);
+            if(m){
+              const p=Number(m[2]);
+              if(p>=3000&&p<=9999)n=p/100;
+            }
+          }
           if(n===null){
             m=compact.match(/(^|\D)(\d{3})(?!\d)/);
             if(m){
