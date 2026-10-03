@@ -420,7 +420,19 @@ async function scanScalePhoto(file){
     URL.revokeObjectURL(img.src);
 
     if(!readings.length){
-      $("scanStatus").textContent="❌ LCD-ის რიცხვი ვერ წავიკითხე.";
+      // Uncertain result: remove the bad frame immediately and return to the
+      // live camera so the user can position the LCD again without leaving
+      // the photo on screen.
+      recognizedScanWeight=null;
+      $("weightInput").value="";
+      $("scanResult").style.display="none";
+      $("scanImage").removeAttribute("src");
+      $("scanPreview").style.display="none";
+      $("scanStatus").textContent="⚠️ რიცხვი ზუსტად ვერ დავადასტურე — თავიდან გადაიღე.";
+      setTimeout(()=>{
+        $("scanStatus").textContent="";
+        openCamera();
+      },900);
       return;
     }
 
