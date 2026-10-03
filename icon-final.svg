@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<defs>
+<radialGradient id="b" cx="50%" cy="30%" r="75%"><stop stop-color="#18d5ff"/><stop offset=".55" stop-color="#087ff5"/><stop offset="1" stop-color="#063bbd"/></radialGradient>
+<linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff8a0"/><stop offset=".25" stop-color="#ffc51c"/><stop offset=".55" stop-color="#fff06a"/><stop offset=".82" stop-color="#dc9800"/><stop offset="1" stop-color="#fff38a"/></linearGradient>
+<filter id="s"><feDropShadow dx="0" dy="4" stdDeviation="4" flood-opacity=".3"/></filter>
+</defs>
+<rect width="512" height="512" fill="#087ff5"/>
+<circle cx="256" cy="256" r="232" fill="url(#b)" stroke="#fff" stroke-width="30"/>
+<g transform="translate(256 25) scale(.62)" fill="url(#g)" stroke="#9b6200" stroke-width="5" stroke-linejoin="round" filter="url(#s)">
+<circle cx="0" cy="55" r="22"/><rect x="-11" y="72" width="22" height="145" rx="10"/>
+<path d="M0 82C-48 82-92 87-137 77-149 74-156 82-152 94c5 14 20 19 35 17 43-5 80-9 117-9s74 4 117 9c15 2 30-3 35-17 4-12-3-20-15-17C92 87 48 82 0 82Z"/>
+<path d="M-137 91L-194 219q-4 9 6 13h102q10-4 6-13z"/><path d="M137 91L80 219q-4 9 6 13h102q10-4 6-13z"/>
+<path d="M-152 222q15 31 65 31t65-31z"/><path d="M22 222q15 31 65 31t65-31z"/>
+<path d="M-14 231h28l14 69h-56z"/><path d="M-28 292h56l22 33H-50z"/><path d="M-62 320H62l19 24H-81z"/>
+</g>
+<text x="256" y="405" text-anchor="middle" font-family="Arial,sans-serif" font-size="76" font-weight="900" letter-spacing="0" fill="#fff" stroke="#087ff5" stroke-width="6" paint-order="stroke" filter="url(#s)">TEMO</text>
+</svg>
