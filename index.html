@@ -396,64 +396,52 @@ function parseWeightOCR(text){
     .replace(/[Il]/g,"1")
     .replace(/[Ss]/g,"5")
     .replace(/[Zz]/g,"2")
-    .replace(/[^0-9.\\s]/g," ")
-    .replace(/\\.{2,}/g,".");
+    .replace(/[^0-9.\s]/g," ")
+    .replace(/\.{2,}/g,".");
+
   const candidates=[];
   const add=(value,priority=0)=>{
     const n=Number(value);
     if(!Number.isFinite(n)||n<=0||n>300)return;
-    const s=Number.isInteger(n)?String(n):n.toFixed(2).replace(/0+$/,"").replace(/\\.$/,"");
+    const s=Number.isInteger(n)
+      ? String(n)
+      : n.toFixed(2).replace(/0+$/,"").replace(/\.$/,"");
     candidates.push({raw:s,number:n,priority});
   };
 
-  // 1) OCR already found the decimal point.
-  for(const m of clean.match(/\\b\\d{1,3}\\.\\d{1,2}\\b/g)||[]) add(m,100);
+  // OCR already found the decimal point.
+  for(const m of clean.match(/\b\d{1,3}(?:\.\d{1,2})?\b/g)||[]){
+    add(m,100);
+  }
 
-  // 2) OCR sometimes separates the number around the decimal: "76 10", "82 20", "87 8".
-  const parts=clean.trim().split(/\\s+/).filter(Boolean);
-  for(let i=0;i<parts.length;i++){
-    const a=parts[i];
-    if(!/^\\d{1,3}$/.test(a))continue;
-
-    if(i+1<parts.length && /^\\d{1,2}$/.test(parts[i+1])){
-      const b=parts[i+1];
-      add(a+"."+b,95);
-    }
-
-    // OCR may keep the last part with the decimal: "8 7.8" -> 87.8.
-    if(i+1<parts.length && /^\\d{1,3}\\.\\d{1,2}$/.test(parts[i+1])){
-      add(a+parts[i+1],94);
+  // OCR may split the decimal: "76 10" -> 76.10, "87 7" -> 87.7.
+  const parts=clean.trim().split(/\s+/).filter(Boolean);
+  for(let i=0;i<parts.length-1;i++){
+    if(/^\d{1,3}$/.test(parts[i]) && /^\d{1,2}$/.test(parts[i+1])){
+      add(parts[i]+"."+parts[i+1],95);
     }
   }
 
-  // 3) OCR may completely lose the decimal point in a 4-digit weight.
-  // Prefer X Y.Z when it gives a plausible scale weight; otherwise use XY.ZZ.
-  for(const d of clean.match(/\\b\\d{4}\\b/g)||[]){
-    const a=Number(d.slice(0,3)+"."+d.slice(3));
-    const b=Number(d.slice(0,2)+"."+d.slice(2));
-    if(a>0&&a<=300)add(a.toFixed(1),88);
-    if(b>0&&b<=300)add(b.toFixed(2),87);
+  // OCR may lose the decimal completely: 877 -> 87.7, 8220 -> 82.20.
+  for(const d of clean.match(/\b\d{4}\b/g)||[]){
+    const n2=Number(d.slice(0,2)+"."+d.slice(2));
+    if(n2>0&&n2<=300)add(n2.toFixed(2),90);
   }
-
-  // 4) For 3 digits, a missing decimal is usually the final digit:
-  // 878 -> 87.8, 119 -> 11.9. Keep true 100+ kg integers intact.
-  for(const d of clean.match(/\\b\\d{3}\\b/g)||[]){
+  for(const d of clean.match(/\b\d{3}\b/g)||[]){
     const n=Number(d);
-    if(n>=100&&n<=300)add(d,70);
-    else if(n>0)add(d.slice(0,2)+"."+d.slice(2),86);
+    if(n<100)add(d.slice(0,2)+"."+d.slice(2),88);
   }
 
-  // 5) Plain decimal/integer candidates as a final fallback.
-  for(const m of clean.match(/\\b\\d{1,3}(?:\\.\\d{1,2})?\\b/g)||[]) add(m,50);
+  // Plain numeric fallback.
+  for(const m of clean.match(/\b\d{1,3}(?:\.\d{1,2})?\b/g)||[]){
+    add(m,50);
+  }
 
   if(!candidates.length)return null;
-
-  // Prefer explicit/structurally reconstructed decimals, then the longest useful value.
   candidates.sort((a,b)=>
     (b.priority-a.priority) ||
     (String(b.raw).length-String(a.raw).length)
   );
-
   return candidates[0];
 }
 
