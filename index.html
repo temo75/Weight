@@ -439,23 +439,8 @@ async function scanScalePhoto(file,manual=false){
     $("weightInput").value=String(weight);
     $("scanStatus").textContent="✅ დაფიქსირდა: "+(found.raw||weight)+" კგ — ვინახავ...";
 
-    // Keep the captured photo visible on the web page for 3 seconds.
-    const photoCanvas=document.createElement("canvas");
-    photoCanvas.width=img.naturalWidth||img.width;
-    photoCanvas.height=img.naturalHeight||img.height;
-    photoCanvas.getContext("2d").drawImage(img,0,0,photoCanvas.width,photoCanvas.height);
-    $("scanImage").src=photoCanvas.toDataURL("image/jpeg",.92);
-    $("scanPreview").style.display="block";
-
-    // Save immediately. Close only the camera window after 1 second.
+    // Save the recognized weight immediately.
     $("saveBtn").click();
-    setTimeout(()=>closeCamera(),1000);
-
-    // Remove the saved preview after 3 seconds.
-    setTimeout(()=>{
-      $("scanImage").removeAttribute("src");
-      $("scanPreview").style.display="none";
-    },3000);
     $("scanResult").style.display="none";
   }catch(e){
     if(url)URL.revokeObjectURL(url);
@@ -497,13 +482,24 @@ function captureCurrentCameraFrame(manual=false){
   cv.height=Math.max(350,Math.round(sh*2));
   cv.getContext("2d").drawImage(video,sx,sy,sw,sh,0,0,cv.width,cv.height);
 
+  // Manual capture: show the exact captured photo on the page immediately.
+  // The camera window closes after 1 second; the photo remains for 5 seconds.
+  if(manual){
+    $("scanImage").src=cv.toDataURL("image/jpeg",.92);
+    $("scanPreview").style.display="block";
+    $("scanStatus").textContent="📸 ფოტო დაფიქსირდა — ვამუშავებ...";
+    setTimeout(()=>closeCamera(),1000);
+    setTimeout(()=>{
+      $("scanImage").removeAttribute("src");
+      $("scanPreview").style.display="none";
+    },5000);
+  }
+
   cv.toBlob(blob=>{
     if(!blob||!cameraStream)return;
     if(autoScanBusy&&!manual)return;
     autoScanBusy=true;
 
-    // scanScalePhoto keeps the live camera open.
-    // It will close the camera only after a confirmed reading.
     Promise.resolve(scanScalePhoto(blob,manual)).finally(()=>{
       autoScanBusy=false;
     });
