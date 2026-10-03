@@ -157,10 +157,12 @@ function render(){
  renderCalendar();draw()
 }
 let ocrLoadPromise=null;
+
 async function loadOCR(){
   if(ocrWorker)return ocrWorker;
   if(ocrLoadPromise)return ocrLoadPromise;
-  $("scanStatus").textContent="OCR მოდული იტვირთება...";
+
+  $("scanStatus").textContent="📚 სპეციალური 7-segment OCR იტვირთება...";
   ocrLoadPromise=(async()=>{
     try{
       if(!window.Tesseract){
@@ -171,264 +173,294 @@ async function loadOCR(){
           document.head.appendChild(s);
         });
       }
-      ocrWorker=await Tesseract.createWorker("eng");
+
+      /*
+        IMPORTANT:
+        Generic "eng" OCR is NOT used here.
+        This worker uses a trained seven-segment model ("ssd_int").
+        The model is specifically trained for digital seven-segment displays.
+      */
+      ocrWorker=await Tesseract.createWorker("ssd_int",0,{
+        langPath:"https://raw.githubusercontent.com/Shreeshrii/tessdata_ssd/master",
+        gzip:false,
+        legacyCore:true,
+        legacyLang:true
+      });
+
       await ocrWorker.setParameters({
         tessedit_char_whitelist:"0123456789.,",
-        preserve_interword_spaces:"1"
+        preserve_interword_spaces:"0",
+        classify_bln_numeric_mode:"1",
+        load_number_dawg:"0",
+        load_freq_dawg:"0",
+        load_system_dawg:"0"
       });
+
       return ocrWorker;
     }catch(e){
+      console.error("7-segment OCR load",e);
       ocrLoadPromise=null;
       ocrWorker=null;
       throw e;
     }
   })();
+
   return ocrLoadPromise;
 }
-function normalizeOCRNumber(text){
-  return text.replace(/,/g,".").replace(/[Oo]/g,"0").replace(/[Il|]/g,"1").replace(/[^0-9.]/g,"");
+
+function normalizeSevenOCR(text){
+  return String(text||"")
+    .replace(/,/g,".")
+    .replace(/[OoQ]/g,"0")
+    .replace(/[Il|]/g,"1")
+    .replace(/[^0-9.]/g,"");
 }
-function extractWeightFromResult(result){
-  const words=(result?.data?.words||[]).map(w=>{
-    const raw=normalizeOCRNumber(w.text||"");
-    const m=raw.match(/\d{2,3}(?:\.\d{1,2})?/);
-    if(!m)return null;
-    const n=Number(m[0]),b=w.bbox||{};
-    const h=Math.max(0,(b.y1||0)-(b.y0||0)),wid=Math.max(0,(b.x1||0)-(b.x0||0));
-    const conf=Number(w.confidence)||0;
-    if(!Number.isFinite(n)||n<30||n>250||h<18||conf<35)return null;
-    return {n,h,wid,conf,score:h*2+wid*.08+conf*.12};
-  }).filter(Boolean);
-  words.sort((a,b)=>b.score-a.score);
-  return words[0]||null;
+
+function parseSevenOCR(text){
+  const s=normalizeSevenOCR(text);
+  const candidates=[];
+
+  const add=n=>{
+    if(!Number.isFinite(n)||n<30||n>250)return;
+    candidates.push(Math.round(n*10)/10);
+  };
+
+  let m=s.match(/(\d{2,3})\.(\d{1,2})/);
+  if(m)add(Number(m[1]+"."+m[2]));
+
+  // Decimal point sometimes disappears:
+  // 173 -> 17.3
+  // 8830 -> 88.3
+  const digits=s.replace(/\./g,"");
+  if(digits.length===3){
+    const n=Number(digits);
+    if(n>=300&&n<=999)add(n/10);
+    else if(n>=30&&n<=250)add(n);
+  }
+  if(digits.length===4){
+    const n=Number(digits);
+    if(n>=3000&&n<=9999)add(n/100);
+    else if(n>=300&&n<=999)add(n/10);
+  }
+
+  return candidates[0]??null;
 }
-function normalizeScaleReading(n){
-  if(!Number.isFinite(n))return null;
-  // This scale shows one decimal. OCR may read 87.2 as 872.
-  if(Number.isInteger(n)&&n>=300&&n<=999)return Math.round((n/10)*10)/10;
-  return Math.round(n*10)/10;
-}
-function extractWeight(text){
-  const cleaned=normalizeOCRNumber(text);
-  const matches=cleaned.match(/\d{2,3}(?:\.\d{1,2})?/g)||[];
-  const candidates=matches.map(Number).filter(n=>n>=30&&n<=250);
-  return candidates.length?candidates[0]:null;
-}
-function makeScaleCrops(file){
-  return new Promise((resolve,reject)=>{
-    const img=new Image(),url=URL.createObjectURL(file);
-    img.onload=()=>{
-      const W=img.naturalWidth,H=img.naturalHeight;
-      const crops=[];
-      // The scale display is normally near the center of the photo. Crop aggressively
-      // so branding/specification text on the scale cannot become the recognized weight.
-      const boxes=[
-        [0.25,0.28,0.50,0.44],
-        [0.30,0.34,0.40,0.32],
-        [0.20,0.20,0.60,0.60]
-      ];
-      boxes.forEach(([x,y,w,h])=>{
-        const sw=Math.max(1,Math.round(W*w)),sh=Math.max(1,Math.round(H*h));
-        const cv=document.createElement("canvas");cv.width=sw*2;cv.height=sh*2;
-        const g=cv.getContext("2d");g.imageSmoothingEnabled=true;
-        g.drawImage(img,Math.round(W*x),Math.round(H*y),sw,sh,0,0,sw*2,sh*2);
-        const im=g.getImageData(0,0,cv.width,cv.height),d=im.data;
-        for(let i=0;i<d.length;i+=4){
-          const v=(d[i]*.299+d[i+1]*.587+d[i+2]*.114);
-          const n=v>150?255:0;
-          d[i]=d[i+1]=d[i+2]=n;
-        }
-        g.putImageData(im,0,0);
-        crops.push(cv.toDataURL("image/png"));
-      });
-      URL.revokeObjectURL(url);resolve(crops);
-    };img.onerror=reject;img.src=url;
-  });
-}
-function readSevenSegmentCanvas(source){
-  try{
-    const cv=document.createElement("canvas");
-    const W=source.naturalWidth||source.width,H=source.naturalHeight||source.height;
-    if(!W||!H)return null;
-    cv.width=W;cv.height=H;
-    const g=cv.getContext("2d",{willReadFrequently:true});
-    g.drawImage(source,0,0,W,H);
-    const d=g.getImageData(0,0,W,H).data,gray=new Uint8Array(W*H);
-    for(let i=0,p=0;i<d.length;i+=4,p++)gray[p]=Math.round(.299*d[i]+.587*d[i+1]+.114*d[i+2]);
-    const pct=(a,q)=>{const h=new Uint32Array(256);for(const v of a)h[v]++;let n=0,t=a.length*q;for(let i=0;i<256;i++){n+=h[i];if(n>=t)return i}return 255};
-    const pats={0:"1111110",1:"0110000",2:"1101101",3:"1111001",4:"0110011",5:"1011011",6:"1011111",7:"1110000",8:"1111111",9:"1111011"};
-    const regs=[[.20,.80,0,.16],[.68,.96,.10,.48],[.68,.96,.52,.92],[.20,.80,.84,1],[.04,.32,.52,.92],[.04,.32,.10,.48],[.20,.80,.42,.58]];
-    const out=[];
-    for(const inv of [0,1]){
-      const v=new Uint8Array(W*H);for(let i=0;i<v.length;i++)v[i]=inv?255-gray[i]:gray[i];
-      const th=Math.max(220,Math.min(250,pct(v,.95)-5)),bin=new Uint8Array(W*H);
-      let x0=W,y0=H,x1=-1,y1=-1;
-      for(let y=0;y<H;y++)for(let x=0;x<W;x++){const p=y*W+x;if(v[p]>=th){bin[p]=1;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y}}
-      if(x1<0)continue;
-      const bw=x1-x0+1,bh=y1-y0+1;if(bh<25||bw<60)continue;
-      const n=Math.max(3,Math.min(4,Math.round(bw/(.65*bh)))),sw=bw/n,digs=[];let score=0,ok=true;
-      for(let k=0;k<n;k++){
-        const xa=Math.floor(x0+k*sw),xb=Math.floor(x0+(k+1)*sw)-1;
-        let lx=xa,rx=xb,ty=y0,by=y1,found=false;
-        for(let y=y0;y<=y1;y++)for(let x=xa;x<=xb;x++)if(bin[y*W+x]){if(!found){lx=rx=x;ty=by=y;found=true}else{if(x<lx)lx=x;if(x>rx)rx=x;if(y<ty)ty=y;if(y>by)by=y}}
-        if(!found){ok=false;break}
-        lx=Math.max(xa,lx-3);rx=Math.min(xb,rx+3);ty=Math.max(y0,ty-3);by=Math.min(y1,by+3);
-        const ww=rx-lx+1,hh=by-ty+1,vals=[];for(let y=ty;y<=by;y+=Math.max(1,Math.floor(hh/8)))for(let x=lx;x<=rx;x+=Math.max(1,Math.floor(ww/8)))vals.push(v[y*W+x]);vals.sort((a,b)=>a-b);
-        const bg=vals[Math.floor(vals.length*.25)]||0,bits=[];
-        for(const r of regs){
-          const yy0=ty+Math.floor(r[2]*hh),yy1=Math.min(by+1,Math.max(yy0+1,ty+Math.floor(r[3]*hh))),xx0=lx+Math.floor(r[0]*ww),xx1=Math.min(rx+1,Math.max(xx0+1,lx+Math.floor(r[1]*ww))),z=[];
-          for(let y=yy0;y<yy1;y++)for(let x=xx0;x<xx1;x++)z.push(v[y*W+x]);z.sort((a,b)=>a-b);
-          bits.push((z[Math.floor(z.length*.9)]-bg)>18?1:0);
-        }
-        const sig=bits.join("");let bd=null,dist=99;
-        for(const [dig,pat] of Object.entries(pats)){let dd=0;for(let j=0;j<7;j++)if(sig[j]!==pat[j])dd++;if(dd<dist){dist=dd;bd=dig}}
-        if(dist>1){ok=false;break}digs.push(bd);score+=1-dist/7;
-      }
-      if(!ok)continue;
-      let dot=null;const gy0=Math.floor(y0+bh*.62),gy1=Math.floor(y0+bh*.98);
-      for(let k=1;k<n;k++){let cnt=0,gx0=Math.floor(x0+k*sw-sw*.28),gx1=Math.floor(x0+k*sw+sw*.28);for(let y=gy0;y<=gy1;y++)for(let x=Math.max(x0,gx0);x<=Math.min(x1,gx1);x++)if(bin[y*W+x])cnt++;if(cnt>=6){dot=k;break}}
-      let text=digs.join("");if(dot!==null)text=text.slice(0,dot)+"."+text.slice(dot);else text=text.slice(0,2)+"."+text.slice(2);
-      const num=Number(text);if(Number.isFinite(num)&&num>=30&&num<=250)out.push({number:num,score:score/n});
+
+function makeSevenSegmentOCRImages(img){
+  const W=img.naturalWidth,H=img.naturalHeight;
+  const crops=[];
+  const boxes=[
+    [0.10,0.12,0.80,0.76],
+    [0.15,0.18,0.70,0.64],
+    [0.20,0.22,0.60,0.56],
+    [0.06,0.08,0.88,0.84]
+  ];
+
+  for(const [x,y,w,h] of boxes){
+    const sx=Math.round(W*x),sy=Math.round(H*y);
+    const sw=Math.round(W*w),sh=Math.round(H*h);
+    const outW=1800,outH=700;
+
+    const base=document.createElement("canvas");
+    base.width=outW;base.height=outH;
+    const g=base.getContext("2d",{willReadFrequently:true});
+    g.imageSmoothingEnabled=true;
+    g.drawImage(img,sx,sy,sw,sh,0,0,outW,outH);
+
+    const im=g.getImageData(0,0,outW,outH);
+    const d=im.data;
+    const gray=new Uint8Array(outW*outH);
+
+    for(let i=0,p=0;i<d.length;i+=4,p++){
+      gray[p]=Math.round(.299*d[i]+.587*d[i+1]+.114*d[i+2]);
     }
-    out.sort((a,b)=>b.score-a.score);return out[0]||null;
-  }catch(e){console.error("seven-segment reader",e);return null}
+
+    let sorted=Array.from(gray).sort((a,b)=>a-b);
+    const p08=sorted[Math.floor(sorted.length*.08)];
+    const p50=sorted[Math.floor(sorted.length*.50)];
+    const p92=sorted[Math.floor(sorted.length*.92)];
+
+    const thresholds=[
+      Math.round(p08+(p50-p08)*.42),
+      Math.round(p08+(p50-p08)*.58),
+      Math.round(p08+(p92-p08)*.30)
+    ];
+
+    for(const threshold of thresholds){
+      for(const invert of [false,true]){
+        const cv=document.createElement("canvas");
+        cv.width=outW;cv.height=outH;
+        const c=cv.getContext("2d",{willReadFrequently:true});
+        const o=c.createImageData(outW,outH);
+
+        for(let p=0;p<gray.length;p++){
+          const active=invert
+            ? gray[p]>=Math.max(threshold,p50)
+            : gray[p]<=threshold;
+
+          const v=active?0:255;
+          const q=p*4;
+          o.data[q]=v;o.data[q+1]=v;o.data[q+2]=v;o.data[q+3]=255;
+        }
+
+        c.putImageData(o,0,0);
+        crops.push({
+          image:cv,
+          key:[x,y,w,h,threshold,invert].join("_")
+        });
+      }
+    }
+  }
+
+  return crops;
+}
+
+function makeTightSevenSegmentCrops(img){
+  const W=img.naturalWidth,H=img.naturalHeight;
+  const crops=[];
+  const boxes=[
+    [0.24,0.24,0.52,0.52],
+    [0.18,0.18,0.64,0.64],
+    [0.28,0.28,0.44,0.44]
+  ];
+
+  for(const [x,y,w,h] of boxes){
+    const sx=Math.round(W*x),sy=Math.round(H*y);
+    const sw=Math.round(W*w),sh=Math.round(H*h);
+    const cv=document.createElement("canvas");
+    cv.width=1600;cv.height=620;
+    cv.getContext("2d").drawImage(img,sx,sy,sw,sh,0,0,cv.width,cv.height);
+    crops.push(cv);
+  }
+  return crops;
 }
 
 async function scanScalePhoto(file){
-  $("scanPreview").style.display="block";$("scanResult").style.display="none";recognizedScanWeight=null;
+  $("scanPreview").style.display="block";
+  $("scanResult").style.display="none";
+  recognizedScanWeight=null;
   $("scanImage").src=URL.createObjectURL(file);
-  $("scanStatus").textContent="📖 ვამოწმებ LCD-ის დიდ ციფრებს...";
+  $("scanStatus").textContent="🔎 ვეძებ მხოლოდ სასწორის 7-segment ციფრებს...";
+
+  let imgURL=null;
+
   try{
     const img=await new Promise((resolve,reject)=>{
-      const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=URL.createObjectURL(file);
+      const im=new Image();
+      im.onload=()=>resolve(im);
+      im.onerror=reject;
+      imgURL=URL.createObjectURL(file);
+      im.src=imgURL;
     });
-    const W=img.naturalWidth,H=img.naturalHeight;
+
+    /*
+      We now use TWO independent readers:
+      1) our seven-segment segment classifier;
+      2) a trained seven-segment Tesseract model.
+      A single guess is NEVER accepted.
+    */
+    const votes=[];
     const seven=readSevenSegmentCanvas(img);
-    if(seven && seven.score>=0.84){
-      const w=Math.round(seven.number*100)/100;
-      recognizedScanWeight=w;
-      $("weightInput").value=fmt(w);
-      $("scanStatus").textContent="✅ ზუსტად ამოვიცანი: "+fmt(w)+" კგ";
-      $("scanPreview").style.display="none";
-      $("scanResult").style.display="none";
-      $("scanImage").removeAttribute("src");
-      URL.revokeObjectURL(img.src);
-      return;
+
+    if(seven && Number.isFinite(seven.number) && seven.score>=0.88){
+      votes.push({
+        value:Math.round(seven.number*10)/10,
+        source:"segments",
+        key:"segments"
+      });
     }
 
-    // Only load the heavy OCR module if the dedicated seven-segment reader
-    // could not read the display. This keeps repeat scans fast.
     const worker=await loadOCR();
-    const readings=[];
+    const prepared=makeSevenSegmentOCRImages(img);
+    const tight=makeTightSevenSegmentCrops(img);
+    const allImages=[...prepared.map(x=>x.image),...tight];
 
-    // One purpose only: OCR the LCD area. Do not let the surrounding scale
-    // text, logo or kg label compete with the weight.
-    const boxes=[
-      [.22,.20,.56,.58],
-      [.18,.16,.64,.66]
-    ];
+    let pass=0;
 
-    for(const [x,y,w,h] of boxes){
-      const sx=Math.round(W*x),sy=Math.round(H*y);
-      const sw=Math.round(W*w),sh=Math.round(H*h);
-      const base=document.createElement("canvas");
-      base.width=Math.max(1600,sw*4);
-      base.height=Math.max(600,sh*4);
-      const bg=base.getContext("2d",{willReadFrequently:true});
-      bg.imageSmoothingEnabled=true;
-      bg.drawImage(img,sx,sy,sw,sh,0,0,base.width,base.height);
+    for(const image of allImages){
+      for(const psm of [7,8,13]){
+        pass++;
+        $("scanStatus").textContent="📖 ვამოწმებ LCD-ს... "+pass+"/"+(allImages.length*3);
 
-      for(const mode of ["normal","contrast","threshold","invert"]){
-        const work=document.createElement("canvas");
-        work.width=base.width;work.height=base.height;
-        const g=work.getContext("2d",{willReadFrequently:true});
-        g.drawImage(base,0,0);
+        await worker.setParameters({
+          tessedit_pageseg_mode:psm,
+          tessedit_char_whitelist:"0123456789.,",
+          preserve_interword_spaces:"0",
+          classify_bln_numeric_mode:"1",
+          load_number_dawg:"0",
+          load_freq_dawg:"0",
+          load_system_dawg:"0"
+        });
 
-        if(mode!=="normal"){
-          const im=g.getImageData(0,0,work.width,work.height),d=im.data;
-          let sum=0,count=0;
-          for(let i=0;i<d.length;i+=4){
-            sum+=.299*d[i]+.587*d[i+1]+.114*d[i+2];count++;
-          }
-          const mean=sum/count;
-          for(let i=0;i<d.length;i+=4){
-            const v=.299*d[i]+.587*d[i+1]+.114*d[i+2];
-            let n=v;
-            if(mode==="contrast") n=Math.max(0,Math.min(255,(v-85)*2.8+85));
-            if(mode==="threshold") n=v<(mean-10)?0:255;
-            if(mode==="invert") n=255-v;
-            d[i]=d[i+1]=d[i+2]=n;
-          }
-          g.putImageData(im,0,0);
-        }
+        const result=await worker.recognize(image);
+        const raw=String(result.data?.text||"");
+        const n=parseSevenOCR(raw);
 
-        for(const psm of [7,6]){
-          await worker.setParameters({
-            tessedit_pageseg_mode:psm,
-            tessedit_char_whitelist:"0123456789.",
-            preserve_interword_spaces:"0",
-            user_defined_dpi:"300",
-            classify_bln_numeric_mode:"1",
-            tessedit_do_invert:"0"
+        if(n!==null){
+          votes.push({
+            value:n,
+            source:"trained-ocr",
+            key:"ocr-"+pass,
+            confidence:Number(result.data?.confidence)||0
           });
-
-          const result=await worker.recognize(work);
-          const raw=String(result.data?.text||"");
-          const conf=Number(result.data?.confidence)||0;
-          const compact=raw.replace(/,/g,".").replace(/\s+/g,"");
-
-          let n=null;
-
-          // Digital scales may show one OR two decimal places:
-          // 87.2 / 87.20 / 88.3 / 88.30
-          let m=compact.match(/(^|\D)(\d{2,3})\.(\d{1,2})(?!\d)/);
-          if(m)n=Number(m[2]+"."+m[3]);
-
-          // If OCR drops the decimal point:
-          // 872 -> 87.2
-          // 8830 -> 88.30
-          if(n===null){
-            m=compact.match(/(^|\D)(\d{4})(?!\d)/);
-            if(m){
-              const p=Number(m[2]);
-              if(p>=3000&&p<=9999)n=p/100;
-            }
-          }
-          if(n===null){
-            m=compact.match(/(^|\D)(\d{3})(?!\d)/);
-            if(m){
-              const p=Number(m[2]);
-              if(p>=300&&p<=999)n=p/10;
-            }
-          }
-
-          if(n===null){
-            const digits=(raw.match(/\d/g)||[]).join("");
-            if(digits.length===3){
-              const p=Number(digits);
-              if(p>=300&&p<=999)n=p/10;
-            }
-          }
-
-          if(Number.isFinite(n)&&n>=30&&n<=250){
-            readings.push({n:Math.round(n*10)/10,conf,mode,box:x<.2?"wide":"tight"});
-          }
         }
       }
     }
 
-    URL.revokeObjectURL(img.src);
+    if(imgURL)URL.revokeObjectURL(imgURL);
 
-    if(!readings.length){
-      // Uncertain result: remove the bad frame immediately and return to the
-      // live camera so the user can position the LCD again without leaving
-      // the photo on screen.
+    /*
+      Count independent OCR variants.
+      The same wrong number appearing once is rejected.
+      For an automatic acceptance we require at least THREE independent
+      trained-OCR passes to agree, OR a segment-reader vote plus TWO
+      trained-OCR passes agreeing with it.
+    */
+    const groups={};
+
+    for(const v of votes){
+      const k=v.value.toFixed(1);
+      if(!groups[k]){
+        groups[k]={
+          value:v.value,
+          trained:0,
+          segment:false,
+          confidence:0,
+          keys:new Set()
+        };
+      }
+      groups[k].keys.add(v.key);
+      if(v.source==="trained-ocr"){
+        groups[k].trained++;
+        groups[k].confidence+=v.confidence||0;
+      }else{
+        groups[k].segment=true;
+      }
+    }
+
+    const ranked=Object.values(groups).sort((a,b)=>
+      (b.trained-a.trained) ||
+      (Number(b.segment)-Number(a.segment)) ||
+      (b.confidence-a.confidence)
+    );
+
+    const best=ranked[0];
+
+    if(!best ||
+       best.trained<3 ||
+       best.keys.size<3 ||
+       (best.segment===false && best.trained<4)){
+      /*
+        Nothing is trusted.
+        Remove the photo immediately and send the user back to the camera.
+      */
       recognizedScanWeight=null;
       $("weightInput").value="";
       $("scanResult").style.display="none";
       $("scanImage").removeAttribute("src");
       $("scanPreview").style.display="none";
-      $("scanStatus").textContent="⚠️ რიცხვი ზუსტად ვერ დავადასტურე — თავიდან გადაიღე.";
+      $("scanStatus").textContent="⚠️ რიცხვი ზუსტად ვერ დავადასტურე — ფოტო უარყოფილია. თავიდან გადაიღე.";
+
       setTimeout(()=>{
         $("scanStatus").textContent="";
         openCamera();
@@ -436,45 +468,32 @@ async function scanScalePhoto(file){
       return;
     }
 
-    // IMPORTANT: never choose a random OCR hallucination.
-    // A weight is accepted only when independent OCR passes agree.
-    const groups={};
-    readings.forEach(r=>{
-      const k=r.n.toFixed(1);
-      if(!groups[k])groups[k]={n:r.n,passes:0,modes:new Set(),tight:0,conf:0};
-      groups[k].passes++;
-      groups[k].modes.add(r.mode);
-      if(r.box==="tight")groups[k].tight++;
-      groups[k].conf+=r.conf;
-    });
-
-    const ranked=Object.values(groups).sort((a,b)=>
-      b.modes.size-a.modes.size ||
-      b.passes-a.passes ||
-      b.tight-a.tight ||
-      b.conf-a.conf
-    );
-    const best=ranked[0];
-
-    // Require agreement from at least two different image-processing passes.
-    // This is the key change: 79.3/91.4 type one-off guesses are rejected.
-    if(!best || best.modes.size<2){
-      $("scanStatus").textContent="⚠️ რიცხვი ზუსტად ვერ დავადასტურე — არ შევიტან არასწორ მონაცემს.";
-      return;
-    }
-
-    const w=best.n;
+    const w=Math.round(best.value*10)/10;
     recognizedScanWeight=w;
     $("weightInput").value=fmt(w);
-    $("scanStatus").textContent="✅ დადასტურებულია: "+fmt(w)+" კგ";
+    $("scanStatus").textContent="✅ 7-segment OCR-ით დადასტურებულია: "+fmt(w)+" კგ";
     $("scanPreview").style.display="none";
     $("scanResult").style.display="none";
     $("scanImage").removeAttribute("src");
+
   }catch(e){
-    console.error(e);
-    $("scanStatus").textContent="❌ რიცხვის ამოცნობა ვერ მოხერხდა.";
+    console.error("scale OCR",e);
+    if(imgURL)URL.revokeObjectURL(imgURL);
+
+    recognizedScanWeight=null;
+    $("weightInput").value="";
+    $("scanResult").style.display="none";
+    $("scanImage").removeAttribute("src");
+    $("scanPreview").style.display="none";
+    $("scanStatus").textContent="⚠️ რიცხვი ვერ დადასტურდა — თავიდან გადაიღე.";
+
+    setTimeout(()=>{
+      $("scanStatus").textContent="";
+      openCamera();
+    },900);
   }
 }
+
 let cameraStream=null,cameraTrack=null;
 async function openCamera(){
   try{
