@@ -406,6 +406,28 @@ async function recognizeWeightOCR(canvas){
 }
 let cameraStream=null,cameraTrack=null;
 
+async function scanScalePhoto(file){
+  try{
+    $("scanStatus").textContent="🔎 ჩარჩოში რიცხვს ვკითხულობ...";
+    const dataUrl=await fileToDataUrl(file);
+    const img=new Image();
+    await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=dataUrl});
+    const cv=document.createElement("canvas");
+    cv.width=img.naturalWidth;cv.height=img.naturalHeight;
+    cv.getContext("2d").drawImage(img,0,0);
+    const found=await recognizeWeightOCR(cv);
+    $("weightInput").value=found.raw||found.number;
+    $("recognizedWeight").textContent=(found.raw||found.number)+" კგ";
+    $("scanResult").style.display="block";
+    $("confirmScanBtn").style.display="block";
+    $("scanStatus").textContent="✅ რიცხვი ამოვიცანი — გადაამოწმე და დაადასტურე.";
+  }catch(e){
+    console.warn("OCR:",e);
+    $("scanStatus").textContent="❌ OCR ვერ შესრულდა: "+(e.message||"შეცდომა");
+    $("confirmScanBtn").style.display="block";
+  }
+}
+
 function captureCurrentCameraFrame(manual=false){
  const video=$("cameraVideo");
  if(!cameraStream){$("scanStatus").textContent="❌ კამერა ჩართული არ არის.";return}
@@ -413,7 +435,7 @@ function captureCurrentCameraFrame(manual=false){
  const roi=cropCameraFrame(video);
  if(manual){
   $("scanStatus").textContent="📸 ჩარჩო დაფიქსირდა — რიცხვს ვკითხულობ...";
-  $("scanImage").src=roi.toDataURL("image/jpeg",.95);$("scanPreview").style.display="block";closeCamera();
+  $("scanImage").src=roi.toDataURL("image/jpeg",.95);$("scanPreview").style.display="block";$("confirmScanBtn").style.display="block";closeCamera();
  }
  roi.toBlob(blob=>{if(blob)scanScalePhoto(blob).catch(()=>{})},"image/jpeg",.95);
 }
