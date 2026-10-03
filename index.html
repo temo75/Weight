@@ -390,12 +390,27 @@ function getOCRSpaceKey(){
   return key;
 }
 function parseWeightOCR(text){
-  const clean=String(text||"").replace(/,/g,".").replace(/O/gi,"0").replace(/[Il]/g,"1").replace(/S/gi,"5").replace(/Z/gi,"2").replace(/[^0-9.\s]/g," ");
-  const m=clean.match(/\b\d{1,3}(?:\.\d{1,2})?\b/g)||[];
+  const raw=String(text||"");
+  const clean=raw.replace(/,/g,".").replace(/O/gi,"0").replace(/[Il]/g,"1").replace(/S/gi,"5").replace(/Z/gi,"2").replace(/[^0-9.\\s]/g," ");
+  const m=clean.match(/\\b\\d{1,3}(?:\\.\\d{1,2})?\\b/g)||[];
   const valid=m.filter(x=>{const n=Number(x);return Number.isFinite(n)&&n>1&&n<=300});
-  if(!valid.length)return null;
-  valid.sort((a,b)=>(b.includes(".")-a.includes("."))||(b.length-a.length));
-  return {raw:valid[0],number:Number(valid[0])};
+  if(valid.length){
+    valid.sort((a,b)=>(b.includes(".")-a.includes("."))||(b.length-a.length));
+    return {raw:valid[0],number:Number(valid[0])};
+  }
+  const parts=clean.trim().split(/\\s+/).filter(Boolean);
+  for(let i=0;i<parts.length-1;i++){
+    const joined=parts[i]+"."+parts[i+1];
+    const n=Number(joined);
+    if(/^\\d{1,3}\\.\\d{1,2}$/.test(joined)&&n>1&&n<=300)return {raw:joined,number:n};
+  }
+  const digits=clean.replace(/\\D/g,"");
+  if(/^\\d{4}$/.test(digits)){
+    const joined=digits.slice(0,2)+"."+digits.slice(2);
+    const n=Number(joined);
+    if(n>1&&n<=300)return {raw:joined,number:n};
+  }
+  return null;
 }
 async function recognizeWeightOCR(canvas){
   const key=getOCRSpaceKey();
