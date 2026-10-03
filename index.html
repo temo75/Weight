@@ -12,7 +12,6 @@
 .photo-scan{background:linear-gradient(135deg,#6d4aff,#087ff5 55%,#19bde8);color:#fff;border:0}.photo-scan .muted{color:#e7f4ff}.scan-actions{display:grid;grid-template-columns:1fr;gap:9px}.scan-preview{display:none;margin-top:12px;border-radius:18px;overflow:hidden;border:2px solid #b9e8ff;background:#eef8ff}.scan-preview img{width:100%;max-height:260px;object-fit:contain;display:block}.scan-result{display:none;margin-top:12px;padding:14px;border-radius:16px;background:linear-gradient(135deg,#eafff4,#eef8ff);border:1px solid #bfead7;text-align:center}.scan-result strong{display:block;font-size:28px;color:#087ff5;margin:5px}.scan-status{font-size:13px;color:#101820;text-align:center;font-weight:800;margin-top:9px;min-height:16px;line-height:1.35;background:rgba(255,255,255,.72);border-radius:10px;padding:7px 10px;box-sizing:border-box}.camera-modal{display:none;position:fixed;inset:0;z-index:9999;background:#07111df2;padding:8px;align-items:center;justify-content:center}.camera-box{width:min(430px,100%);max-height:calc(100dvh - 16px);box-sizing:border-box;overflow:hidden;background:#102033;border-radius:20px;padding:10px;box-shadow:0 20px 60px #0008}.camera-stage{position:relative;border-radius:15px;overflow:hidden;background:#000;aspect-ratio:4/3;max-height:52dvh}.camera-stage video{width:100%;height:100%;object-fit:cover;display:block}.ocr-frame{position:absolute;left:8%;right:8%;top:31%;height:38%;border:3px solid #19bde8;border-radius:14px;box-shadow:0 0 0 9999px rgba(0,0,0,.28),0 0 18px #19bde8;pointer-events:none}.ocr-frame-label{position:absolute;left:50%;top:calc(31% - 30px);transform:translateX(-50%);background:#19bde8;color:#06131b;font-weight:900;padding:5px 12px;border-radius:10px;font-size:13px;white-space:nowrap;pointer-events:none}.zoom-row{display:flex;align-items:center;gap:8px;color:#fff;padding:6px 2px 2px}.zoom-row input{padding:0;border:0;box-shadow:none;width:100%;height:28px;accent-color:#19bde8}.camera-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.camera-actions .btn{margin-top:6px;padding:10px}.camera-close{background:#263b52}.dark .scan-result{background:#102f2a;border-color:#285844}.dark .scan-preview{background:#102033;border-color:#294968}.dark .camera-box{background:#0d1a29}
 @media(max-width:560px){.stats{grid-template-columns:1fr 1fr}.insights{grid-template-columns:1fr 1fr 1fr}.big{font-size:54px}.row{grid-template-columns:1fr auto auto}.row .chg{display:none}.grid2,.tools{grid-template-columns:1fr}.app{padding-left:11px;padding-right:11px}}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
 </head>
 <body>
@@ -391,49 +390,113 @@ function getOCRSpaceKey(){
 }
 function parseWeightOCR(text){
   const raw=String(text||"");
-  const clean=raw.replace(/,/g,".").replace(/O/gi,"0").replace(/[Il]/g,"1").replace(/S/gi,"5").replace(/Z/gi,"2").replace(/[^0-9.\\s]/g," ");
-  const m=clean.match(/\\b\\d{1,3}(?:\\.\\d{1,2})?\\b/g)||[];
-  const valid=m.filter(x=>{const n=Number(x);return Number.isFinite(n)&&n>1&&n<=300});
-  if(valid.length){
-    valid.sort((a,b)=>(b.includes(".")-a.includes("."))||(b.length-a.length));
-    return {raw:valid[0],number:Number(valid[0])};
-  }
+  const clean=raw
+    .replace(/,/g,".")
+    .replace(/[Oo]/g,"0")
+    .replace(/[Il]/g,"1")
+    .replace(/[Ss]/g,"5")
+    .replace(/[Zz]/g,"2")
+    .replace(/[^0-9.\\s]/g," ")
+    .replace(/\\.{2,}/g,".");
+  const candidates=[];
+  const add=(value,priority=0)=>{
+    const n=Number(value);
+    if(!Number.isFinite(n)||n<=0||n>300)return;
+    const s=Number.isInteger(n)?String(n):n.toFixed(2).replace(/0+$/,"").replace(/\\.$/,"");
+    candidates.push({raw:s,number:n,priority});
+  };
+
+  // 1) OCR already found the decimal point.
+  for(const m of clean.match(/\\b\\d{1,3}\\.\\d{1,2}\\b/g)||[]) add(m,100);
+
+  // 2) OCR sometimes separates the number around the decimal: "76 10", "82 20", "87 8".
   const parts=clean.trim().split(/\\s+/).filter(Boolean);
-  for(let i=0;i<parts.length-1;i++){
-    const joined=parts[i]+"."+parts[i+1];
-    const n=Number(joined);
-    if(/^\\d{1,3}\\.\\d{1,2}$/.test(joined)&&n>1&&n<=300)return {raw:joined,number:n};
+  for(let i=0;i<parts.length;i++){
+    const a=parts[i];
+    if(!/^\\d{1,3}$/.test(a))continue;
+
+    if(i+1<parts.length && /^\\d{1,2}$/.test(parts[i+1])){
+      const b=parts[i+1];
+      add(a+"."+b,95);
+    }
+
+    // OCR may keep the last part with the decimal: "8 7.8" -> 87.8.
+    if(i+1<parts.length && /^\\d{1,3}\\.\\d{1,2}$/.test(parts[i+1])){
+      add(a+parts[i+1],94);
+    }
   }
-  const digits=clean.replace(/\\D/g,"");
-  if(/^\\d{4}$/.test(digits)){
-    const joined=digits.slice(0,2)+"."+digits.slice(2);
-    const n=Number(joined);
-    if(n>1&&n<=300)return {raw:joined,number:n};
+
+  // 3) OCR may completely lose the decimal point in a 4-digit weight.
+  // Prefer X Y.Z when it gives a plausible scale weight; otherwise use XY.ZZ.
+  for(const d of clean.match(/\\b\\d{4}\\b/g)||[]){
+    const a=Number(d.slice(0,3)+"."+d.slice(3));
+    const b=Number(d.slice(0,2)+"."+d.slice(2));
+    if(a>0&&a<=300)add(a.toFixed(1),88);
+    if(b>0&&b<=300)add(b.toFixed(2),87);
   }
-  return null;
+
+  // 4) For 3 digits, a missing decimal is usually the final digit:
+  // 878 -> 87.8, 119 -> 11.9. Keep true 100+ kg integers intact.
+  for(const d of clean.match(/\\b\\d{3}\\b/g)||[]){
+    const n=Number(d);
+    if(n>=100&&n<=300)add(d,70);
+    else if(n>0)add(d.slice(0,2)+"."+d.slice(2),86);
+  }
+
+  // 5) Plain decimal/integer candidates as a final fallback.
+  for(const m of clean.match(/\\b\\d{1,3}(?:\\.\\d{1,2})?\\b/g)||[]) add(m,50);
+
+  if(!candidates.length)return null;
+
+  // Prefer explicit/structurally reconstructed decimals, then the longest useful value.
+  candidates.sort((a,b)=>
+    (b.priority-a.priority) ||
+    (String(b.raw).length-String(a.raw).length)
+  );
+
+  return candidates[0];
 }
+
 async function recognizeWeightOCR(canvas){
   const key=getOCRSpaceKey();
   if(!key)throw new Error("OCR.space API Key არ არის შეყვანილი");
   $("scanStatus").textContent="🔎 OCR.space კითხულობს რიცხვს...";
+
   const form=new FormData();
   form.append("base64Image",canvas.toDataURL("image/jpeg",.95));
-  form.append("language","eng");
+  form.append("language","auto");
   form.append("OCREngine","2");
   form.append("isOverlayRequired","false");
+  form.append("detectOrientation","true");
   form.append("scale","true");
+
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),20000);
+
   try{
-    const res=await fetch("https://api.ocr.space/parse/image",{method:"POST",headers:{apikey:key},body:form,signal:controller.signal});
+    const res=await fetch("https://api.ocr.space/parse/image",{
+      method:"POST",
+      headers:{apikey:key},
+      body:form,
+      signal:controller.signal
+    });
     if(!res.ok)throw new Error("OCR HTTP "+res.status);
+
     const json=await res.json();
-    if(json.IsErroredOnProcessing)throw new Error(String(json.ErrorMessage||"OCR processing failed"));
-    const text=(json.ParsedResults||[]).map(x=>String(x.ParsedText||"")).join("\n");
+    if(json.IsErroredOnProcessing)
+      throw new Error(String(json.ErrorMessage||"OCR processing failed"));
+
+    const text=(json.ParsedResults||[])
+      .map(x=>String(x.ParsedText||""))
+      .join("\\n");
+
     const found=parseWeightOCR(text);
     if(!found)throw new Error("OCR-მ რიცხვი ვერ ამოიცნო");
+
     return found;
-  }finally{clearTimeout(timer)}
+  }finally{
+    clearTimeout(timer);
+  }
 }
 function cropCameraFrame(video){
  const vw=video.videoWidth,vh=video.videoHeight,stage=video.parentElement,sw=stage.clientWidth,sh=stage.clientHeight;
@@ -441,11 +504,6 @@ function cropCameraFrame(video){
  const fx=sw*.08,fy=sh*.31,fw=sw*.84,fh=sh*.38,sx=Math.max(0,(ox+fx)/scale),sy=Math.max(0,(oy+fy)/scale),ex=Math.min(vw,(ox+fx+fw)/scale),ey=Math.min(vh,(oy+fy+fh)/scale),cw=Math.max(1,ex-sx),ch=Math.max(1,ey-sy);
  const out=document.createElement("canvas");out.width=1400;out.height=Math.max(350,Math.round(1400*ch/cw));
  const ctx=out.getContext("2d");ctx.fillStyle="#fff";ctx.fillRect(0,0,out.width,out.height);ctx.drawImage(video,sx,sy,cw,ch,0,0,out.width,out.height);return out;
-}
-function parseWeightOCR(text){
- const clean=String(text||"").replace(/,/g,".").replace(/O/gi,"0").replace(/I/g,"1").replace(/S/g,"5"),m=clean.match(/\b\d{1,3}(?:\.\d{1,2})?\b/g)||[];
- const valid=m.filter(x=>{const n=Number(x);return Number.isFinite(n)&&n>1&&n<=300});if(!valid.length)return null;
- valid.sort((a,b)=>(b.includes(".")-a.includes("."))||(b.length-a.length));return {raw:valid[0],number:Number(valid[0])};
 }
 let cameraStream=null,cameraTrack=null;
 
@@ -585,7 +643,6 @@ $("saveBtn").onclick=()=>{
  const d=today(),r=records.find(x=>x.date===d);if(r){r.weight=w;r.weightRaw=raw}else records.push({date:d,weight:w,weightRaw:raw});
  records.sort((a,b)=>a.date.localeCompare(b.date));saveAll();$("weightInput").value="";render()
 };
-$("confirmScanBtn").onclick=()=>{$("saveBtn").click();$("confirmScanBtn").style.display="none"};
 $("settingsBtn").onclick=()=>{const g=Number($("goalInput").value),h=Number($("heightInput").value);settings.goal=g>0?g:null;settings.height=h>=100?h:null;saveAll();render()};
 $("history").onclick=e=>{const b=e.target.closest("[data-del]");if(!b)return;if(confirm("ამ ჩანაწერის წაშლა?")){records=records.filter(r=>r.date!==b.dataset.del);saveAll();render()}};
 document.querySelectorAll("[data-range]").forEach(b=>b.onclick=()=>{range=b.dataset.range;document.querySelectorAll("[data-range]").forEach(x=>x.classList.remove("active"));b.classList.add("active");draw()});
