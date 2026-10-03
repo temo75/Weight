@@ -381,11 +381,44 @@ function sevenSample(mask,x,y,w,h){
  return best;
 }
 
-let weightOCR=null,weightOCRLoading=null;
-async function loadWeightOCR(){
- if(weightOCR)return weightOCR;if(weightOCRLoading)return weightOCRLoading;
- weightOCRLoading=(async()=>{const mod=await import("https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2");mod.env.allowLocalModels=false;mod.env.allowRemoteModels=true;mod.env.useBrowserCache=true;weightOCR=await mod.pipeline("image-to-text","Xenova/trocr-small-handwritten");return weightOCR})();
- try{return await weightOCRLoading}finally{weightOCRLoading=null}
+function getOCRSpaceKey(){
+  let key=localStorage.getItem("temo_ocr_space_key")||"";
+  if(!key){
+    key=prompt("OCR.space API Key ჩასვი:");
+    if(key){key=key.trim();localStorage.setItem("temo_ocr_space_key",key)}
+  }
+  return key;
+}
+function parseWeightOCR(text){
+  const clean=String(text||"").replace(/,/g,".").replace(/O/gi,"0").replace(/[Il]/g,"1").replace(/S/gi,"5").replace(/Z/gi,"2").replace(/[^0-9.\s]/g," ");
+  const m=clean.match(/\b\d{1,3}(?:\.\d{1,2})?\b/g)||[];
+  const valid=m.filter(x=>{const n=Number(x);return Number.isFinite(n)&&n>1&&n<=300});
+  if(!valid.length)return null;
+  valid.sort((a,b)=>(b.includes(".")-a.includes("."))||(b.length-a.length));
+  return {raw:valid[0],number:Number(valid[0])};
+}
+async function recognizeWeightOCR(canvas){
+  const key=getOCRSpaceKey();
+  if(!key)throw new Error("OCR.space API Key არ არის შეყვანილი");
+  $("scanStatus").textContent="🔎 OCR.space კითხულობს რიცხვს...";
+  const form=new FormData();
+  form.append("base64Image",canvas.toDataURL("image/jpeg",.95));
+  form.append("language","eng");
+  form.append("OCREngine","2");
+  form.append("isOverlayRequired","false");
+  form.append("scale","true");
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),20000);
+  try{
+    const res=await fetch("https://api.ocr.space/parse/image",{method:"POST",headers:{apikey:key},body:form,signal:controller.signal});
+    if(!res.ok)throw new Error("OCR HTTP "+res.status);
+    const json=await res.json();
+    if(json.IsErroredOnProcessing)throw new Error(String(json.ErrorMessage||"OCR processing failed"));
+    const text=(json.ParsedResults||[]).map(x=>String(x.ParsedText||"")).join("\n");
+    const found=parseWeightOCR(text);
+    if(!found)throw new Error("OCR-მ რიცხვი ვერ ამოიცნო");
+    return found;
+  }finally{clearTimeout(timer)}
 }
 function cropCameraFrame(video){
  const vw=video.videoWidth,vh=video.videoHeight,stage=video.parentElement,sw=stage.clientWidth,sh=stage.clientHeight;
@@ -416,6 +449,7 @@ async function scanScalePhoto(file){
     cv.width=img.naturalWidth;cv.height=img.naturalHeight;
     cv.getContext("2d").drawImage(img,0,0);
     const found=await recognizeWeightOCR(cv);
+    if(!found) throw new Error("OCR-მ რიცხვი ვერ ამოიცნო");
     $("weightInput").value=found.raw||found.number;
     $("recognizedWeight").textContent=(found.raw||found.number)+" კგ";
     $("scanResult").style.display="block";
