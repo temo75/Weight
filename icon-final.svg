@@ -6,12 +6,12 @@
 </defs>
 <rect width="512" height="512" fill="#087ff5"/>
 <circle cx="256" cy="256" r="232" fill="url(#b)" stroke="#fff" stroke-width="30"/>
-<g transform="translate(256 25) scale(.62)" fill="url(#g)" stroke="#9b6200" stroke-width="5" stroke-linejoin="round" filter="url(#s)">
+<g transform="translate(256 48) scale(.52)" fill="url(#g)" stroke="#9b6200" stroke-width="5" stroke-linejoin="round" filter="url(#s)">
 <circle cx="0" cy="55" r="22"/><rect x="-11" y="72" width="22" height="145" rx="10"/>
 <path d="M0 82C-48 82-92 87-137 77-149 74-156 82-152 94c5 14 20 19 35 17 43-5 80-9 117-9s74 4 117 9c15 2 30-3 35-17 4-12-3-20-15-17C92 87 48 82 0 82Z"/>
 <path d="M-137 91L-194 219q-4 9 6 13h102q10-4 6-13z"/><path d="M137 91L80 219q-4 9 6 13h102q10-4 6-13z"/>
 <path d="M-152 222q15 31 65 31t65-31z"/><path d="M22 222q15 31 65 31t65-31z"/>
 <path d="M-14 231h28l14 69h-56z"/><path d="M-28 292h56l22 33H-50z"/><path d="M-62 320H62l19 24H-81z"/>
 </g>
-<text x="256" y="405" text-anchor="middle" font-family="Arial,sans-serif" font-size="76" font-weight="900" letter-spacing="0" fill="#fff" stroke="#087ff5" stroke-width="6" paint-order="stroke" filter="url(#s)">TEMO</text>
+<text x="256" y="370" text-anchor="middle" font-family="Arial,sans-serif" font-size="64" font-weight="900" letter-spacing="0" fill="#fff" stroke="#087ff5" stroke-width="6" paint-order="stroke" filter="url(#s)">TEMO</text>
 </svg>
