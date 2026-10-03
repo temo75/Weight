@@ -47,7 +47,7 @@
     <div class="zoom-row"><span>🔍</span><input id="zoomControl" type="range" min="1" max="1" step="0.1" value="1"><span id="zoomValue">1×</span></div>
     <div class="camera-actions">
       <button class="btn camera-close" id="closeCameraBtn">✕ დახურვა</button>
-      <button class="btn" id="captureCameraBtn">📸 დაფიქსირება</button>
+      <button type="button" class="btn" id="captureCameraBtn">📸 დაფიქსირება</button>
     </div>
   </div>
 </div>
@@ -414,7 +414,15 @@ let autoScanTimer=null,autoScanBusy=false;
 
 function captureCurrentCameraFrame(manual=false){
   const video=$("cameraVideo"),stage=document.querySelector(".camera-stage"),frame=document.querySelector(".focus-frame");
-  if(!video.videoWidth||!video.videoHeight||!cameraStream)return;
+  if(!cameraStream){
+    $("scanStatus").textContent="❌ კამერა ჩართული არ არის.";
+    return;
+  }
+  if(!video.videoWidth||!video.videoHeight){
+    $("scanStatus").textContent="⏳ კამერა ჯერ იტვირთება — კიდევ დააჭირე დაფიქსირებას.";
+    video.addEventListener("loadedmetadata",()=>captureCurrentCameraFrame(manual),{once:true});
+    return;
+  }
 
   const sr=stage.getBoundingClientRect(),fr=frame.getBoundingClientRect();
 
@@ -518,12 +526,16 @@ $("zoomControl").oninput=async e=>{
     try{await cameraTrack.applyConstraints({advanced:[{zoom:z}]})}catch(_){}
 };
 
-// Manual capture button: the user can press it to request an immediate reading.
-$("captureCameraBtn").onclick=()=>{
+// Manual capture only.
+document.addEventListener("click",e=>{
+  const btn=e.target.closest("#captureCameraBtn");
+  if(!btn)return;
+  e.preventDefault();
+  e.stopPropagation();
   lastScaleCandidate=null;
   $("scanStatus").textContent="📸 კადრს ვაფიქსირებ...";
   captureCurrentCameraFrame(true);
-};
+});
 
 $("scalePhoto").onchange=e=>{const file=e.target.files?.[0];if(file)scanScalePhoto(file);e.target.value=""};
 
