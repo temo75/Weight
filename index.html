@@ -339,168 +339,207 @@ function sevenMakeROI(img,box,outW=900,outH=500){
   Math.round(img.naturalWidth*w),Math.round(img.naturalHeight*h),0,0,outW,outH);
  return cv;
 }
-function sevenRobustSegments(b,x,y,w,h){
- const out=[];
- const hs=[.10,.12,.14], vs=[.10,.12,.14,.16,.18];
- function avg(x1,y1,x2,y2){
-  x1=Math.max(0,Math.floor(x1));x2=Math.min(b.width,Math.ceil(x2));
-  y1=Math.max(0,Math.floor(y1));y2=Math.min(b.height,Math.ceil(y2));
-  if(x2<=x1||y2<=y1)return 0;
-  let s=0,n=0;const d=b.data;
-  for(let yy=y1;yy<y2;yy++)for(let xx=x1;xx<x2;xx++){s+=d[yy*b.width+xx];n++}
-  return n?s/n:0;
- }
- function maxH(pos){
-  let z=0;
-  for(const py of hs)z=Math.max(z,avg(x+.18*w,y+py*h,x+.82*w,y+(py+.055)*h));
-  return z;
- }
- function maxV(pos,a=.12,c=.45){
-  let z=0;
-  for(const px of vs)z=Math.max(z,avg(x+px*w,y+a*h,x+(px+.055)*w,y+c*h));
-  return z;
- }
- out.push(maxH());
- out.push(maxV());
- out.push(maxV());
- let z=0;
- for(const py of [.46,.48,.50,.52,.54])z=Math.max(z,avg(x+.18*w,y+py*h,x+.82*w,y+(py+.055)*h));
- out.push(z);
- out.push(maxV());
- out.push(maxV());
- out.push(maxH(.88));
- return out;
-}
-
-function sevenThresholdClass(s){
- const bits=s.map(v=>v>=.25?1:0);
- const best={char:"?",score:-1};
- for(const ch in SEVEN_DIGIT_MASKS){
-  const m=SEVEN_DIGIT_MASKS[ch];
-  let score=0;
-  for(let i=0;i<7;i++)if(bits[i]===m[i])score++;
-  score/=7;
-  if(score>best.score)Object.assign(best,{char:ch,score,bits});
+function sevenSegmentScore(bits){
+ const masks=SEVEN_DIGIT_MASKS;let best=null;
+ for(const ch in masks){
+  let s=0;
+  for(let i=0;i<7;i++)s+=bits[i]===masks[ch][i]?1:0;
+  s/=7;
+  if(!best||s>best.score)best={char:ch,score:s};
  }
  return best;
 }
 
-function sevenColumnGroups(mask,w,h,y,hh){
- const p=new Float32Array(w),d=mask.data;
- for(let x=0;x<w;x++){
+function sevenSample(mask,x,y,w,h){
+ const d=mask.data;
+ function zone(x1,y1,x2,y2){
+  x1=Math.max(0,Math.floor(x1));x2=Math.min(mask.width,Math.ceil(x2));
+  y1=Math.max(0,Math.floor(y1));y2=Math.min(mask.height,Math.ceil(y2));
+  let s=0,n=0;
+  for(let yy=y1;yy<y2;yy++)for(let xx=x1;xx<x2;xx++){s+=d[yy*mask.width+xx];n++}
+  return n?s/n:0;
+ }
+ const vals=[
+  zone(x+.18*w,y+.08*h,x+.82*w,y+.22*h),
+  zone(x+.68*w,y+.16*h,x+.92*w,y+.46*h),
+  zone(x+.68*w,y+.54*h,x+.92*w,y+.84*h),
+  zone(x+.18*w,y+.42*h,x+.82*w,y+.58*h),
+  zone(x+.08*w,y+.54*h,x+.32*w,y+.84*h),
+  zone(x+.08*w,y+.16*h,x+.32*w,y+.46*h),
+  zone(x+.18*w,y+.78*h,x+.82*w,y+.92*h)
+ ];
+ const variants=[.20,.25,.30,.35,.40,.45,.50];
+ let best={char:"?",score:0};
+ for(const t of variants){
+  const bits=vals.map(v=>v>=t?1:0);
+  const r=sevenSegmentScore(bits);
+  if(r.score>best.score)best={char:r.char,score:r.score};
+ }
+ return best;
+}
+
+function sevenContrastMask(gray,w,h,dark){
+ const out={width:w,height:h,data:new Uint8Array(w*h)};
+ const rad=Math.max(3,Math.round(Math.min(w,h)*.008));
+ for(let y=0;y<h;y++){
+  for(let x=0;x<w;x++){
+   let s=0,n=0;
+   for(let yy=Math.max(0,y-rad);yy<=Math.min(h-1,y+rad);yy+=2)
+    for(let xx=Math.max(0,x-rad);xx<=Math.min(w-1,x+rad);xx+=2){s+=gray[yy*w+xx];n++}
+   const bg=s/n,v=gray[y*w+x];
+   out.data[y*w+x]=(dark?bg-v:v-bg)>0.075?1:0;
+  }
+ }
+ return out;
+}
+
+function sevenRunColumns(mask,x,y,w,h){
+ const p=new Float32Array(w);
+ for(let xx=0;xx<w;xx++){
   let s=0;
-  for(let yy=y;yy<Math.min(h,y+hh);yy++)s+=d[yy*w+x];
-  p[x]=s/Math.max(1,Math.min(h,y+hh)-y);
+  for(let yy=y;yy<y+h;yy++)s+=mask.data[yy*mask.width+x+xx];
+  p[xx]=s/h;
  }
- const cut=.035;
- const raw=[];let st=-1;
- for(let x=0;x<w;x++){
-  if(p[x]>=cut){if(st<0)st=x}
-  else if(st>=0){if(x-st>=Math.max(3,Math.round(w*.012)))raw.push([st,x]);st=-1}
+ // Keep columns containing real digit pixels.
+ const active=p.map(v=>v>.045);
+ const runs=[];let st=-1;
+ for(let i=0;i<w;i++){
+  if(active[i]&&st<0)st=i;
+  if((!active[i]||i===w-1)&&st>=0){
+   const e=active[i]?i+1:i;
+   if(e-st>=2)runs.push([st,e]);
+   st=-1;
+  }
  }
- if(st>=0&&w-st>=Math.max(3,Math.round(w*.012)))raw.push([st,w]);
+ // Merge tiny gaps caused by broken LCD segments.
  const merged=[];
- for(const q of raw){
+ for(const r of runs){
   const last=merged[merged.length-1];
-  if(last&&q[0]-last[1]<=Math.max(3,Math.round(w*.018)))last[1]=q[1];
-  else merged.push(q.slice());
+  const gap=last?r[0]-last[1]:999;
+  if(last&&gap<=Math.max(3,Math.round(w*.012)))last[1]=r[1];
+  else merged.push(r.slice());
  }
- return merged.filter(q=>{
-  const ww=q[1]-q[0];
-  return ww>=Math.round(w*.025)&&ww<=Math.round(w*.16);
+ return merged;
+}
+
+function sevenGroupDigits(runs){
+ if(!runs.length)return [];
+ const widths=runs.map(r=>r[1]-r[0]).sort((a,b)=>a-b);
+ const med=widths[Math.floor(widths.length/2)]||1;
+ const groups=[];let cur=[runs[0]];
+ for(let i=1;i<runs.length;i++){
+  const gap=runs[i][0]-cur[cur.length-1][1];
+  if(gap<=Math.max(med*1.8,10))cur.push(runs[i]);
+  else{groups.push(cur);cur=[runs[i]]}
+ }
+ groups.push(cur);
+ return groups.map(g=>[g[0][0],g[g.length-1][1]]).filter(r=>{
+  const ww=r[1]-r[0];return ww>=med*.7&&ww<=med*4.5;
  });
 }
 
-function sevenMakeGrayCanvas(img,maxW=900){
+function sevenTryBand(mask,x,y,w,h){
+ const runs=sevenRunColumns(mask,x,y,w,h);
+ const groups=sevenGroupDigits(runs);
+ const answers=[];
+ for(let i=0;i<groups.length;i++){
+  const [a,b]=groups[i],dw=b-a;
+  if(dw<8)continue;
+  const r=sevenSample(mask,x+a,y,dw,h);
+  answers.push({char:r.char,score:r.score,x:a,w:dw});
+ }
+ if(answers.length<2||answers.length>5)return null;
+
+ // Normalize digit widths and reject obvious background/noise.
+ const strong=answers.filter(a=>a.score>=.57);
+ if(strong.length!==answers.length)return null;
+
+ let raw=answers.map(a=>a.char).join("");
+ let confidence=answers.reduce((s,a)=>s+a.score,0)/answers.length;
+ return {raw,confidence,answers};
+}
+
+async function sevenLoadImage(dataUrl){
+ return new Promise((resolve,reject)=>{
+  const img=new Image();
+  img.onload=()=>resolve(img);
+  img.onerror=()=>reject(new Error("image load failed"));
+  img.src=dataUrl;
+ });
+}
+
+function sevenGray(img,maxW=1100){
  const scale=Math.min(1,maxW/img.naturalWidth);
  const cv=document.createElement("canvas");
  cv.width=Math.max(1,Math.round(img.naturalWidth*scale));
  cv.height=Math.max(1,Math.round(img.naturalHeight*scale));
  const ctx=cv.getContext("2d",{willReadFrequently:true});
  ctx.drawImage(img,0,0,cv.width,cv.height);
- const src=ctx.getImageData(0,0,cv.width,cv.height).data;
- const gray=new Float32Array(cv.width*cv.height);
- for(let i=0,p=0;i<src.length;i+=4,p++)gray[p]=(.2126*src[i]+.7152*src[i+1]+.0722*src[i+2])/255;
- return {gray,w:cv.width,h:cv.height};
-}
-
-function sevenBuildContrast(gray,w,h,bright,amount){
- const cv={width:w,height:h,data:new Uint8ClampedArray(w*h)};
- const blur=new Float32Array(w*h);
- const r=Math.max(2,Math.round(Math.min(w,h)*.012));
- for(let y=0;y<h;y++)for(let x=0;x<w;x++){
-  let s=0,n=0;
-  for(let yy=Math.max(0,y-r);yy<=Math.min(h-1,y+r);yy+=2)
-   for(let xx=Math.max(0,x-r);xx<=Math.min(w-1,x+r);xx+=2){s+=gray[yy*w+xx];n++}
-  blur[y*w+x]=s/n;
- }
- for(let i=0;i<gray.length;i++){
-  const v=bright?gray[i]-blur[i]:blur[i]-gray[i];
-  cv.data[i]=Math.max(0,Math.min(255,Math.round(v*255*amount)));
- }
- return cv;
+ const p=ctx.getImageData(0,0,cv.width,cv.height).data;
+ const g=new Float32Array(cv.width*cv.height);
+ for(let i=0,j=0;i<p.length;i+=4,j++)g[j]=(.2126*p[i]+.7152*p[i+1]+.0722*p[i+2])/255;
+ return {g,w:cv.width,h:cv.height};
 }
 
 async function recognizeWeightSevenSegment(dataUrl){
  const img=await sevenLoadImage(dataUrl);
- const {gray,w,h}=sevenMakeGrayCanvas(img,900);
- const masks=[];
- for(const bright of [true,false])
-  for(const amount of [.9,1.15,1.4])
-   masks.push(sevenBuildContrast(gray,w,h,bright,amount));
-
+ const {g,w,h}=sevenGray(img);
  const candidates=[];
- for(const mask of masks){
-  for(let yf=.22;yf<=.70;yf+=.055){
-   for(const hf of [.10,.13,.16,.19,.22]){
-    const y=Math.round(h*yf),hh=Math.round(h*hf);
-    if(y+hh>=h)continue;
-    const groups=sevenColumnGroups(mask,w,h,y,hh);
-    for(const n of [3,4]){
-     if(groups.length<n)continue;
-     for(let si=0;si<=groups.length-n;si++){
-      const q=groups.slice(si,si+n);
-      const widths=q.map(g=>g[1]-g[0]),aw=widths.reduce((a,v)=>a+v,0)/n;
-      if(Math.max(...widths)-Math.min(...widths)>aw*.55)continue;
-      const gaps=q.slice(1).map((g,i)=>g[0]-q[i][1]);
-      if(gaps.some(g=>g<2||g>aw*2.4))continue;
 
-      const chars=[];let total=0,minScore=1;
-      for(const [x1,x2] of q){
-       let best={char:"?",score:-1};
-       for(const dx of [-.08,0,.08]){
-        for(const dy of [-.06,0,.06]){
-         for(const sc of [.88,1,1.12]){
-          const ww=Math.max(8,Math.round((x2-x1)*sc));
-          const hh2=Math.max(20,Math.round(hh*sc));
-          const xx=Math.round((x1+x2)/2-ww/2+aw*dx);
-          const yy=Math.round(y+hh/2-hh2/2+hh*dy);
-          const s=sevenRobustSegments(mask,xx,yy,ww,hh2);
-          const c=sevenThresholdClass(s);
-          if(c.score>best.score)best=c;
-         }
-        }
-       }
-       chars.push(best.char);total+=best.score;minScore=Math.min(minScore,best.score);
-      }
-      const conf=total/n;
-      if(minScore<.57||conf<.66)continue;
-      const raw=chars.join("");
-      const num=Number(n===3?raw.slice(0,2)+"."+raw.slice(2):raw.slice(0,2)+"."+raw.slice(2));
-      if(!Number.isFinite(num)||num<=0||num>500)continue;
-      candidates.push({raw,number:num,confidence:conf,n,y,hh});
+ for(const dark of [false,true]){
+  const mask=sevenContrastMask(g,w,h,dark);
+  for(let hf=.10;hf<=.28;hf+=.03){
+   const hh=Math.round(h*hf);
+   for(let yf=.18;yf<=.72;yf+=.025){
+    const y=Math.round(h*yf);
+    if(y+hh>=h)continue;
+
+    // Test the whole width and several horizontal windows.
+    const windows=[
+      [0,w],
+      [Math.round(w*.05),Math.round(w*.90)],
+      [Math.round(w*.10),Math.round(w*.80)],
+      [Math.round(w*.15),Math.round(w*.70)]
+    ];
+    for(const [x1,x2] of windows){
+     const r=sevenTryBand(mask,x1,y,x2-x1,hh);
+     if(!r)continue;
+     if(r.confidence<.68)continue;
+     const n=r.raw.length;
+     if(n<2||n>5)continue;
+
+     // Scales normally show one decimal or two decimals.
+     // Try every decimal position and keep plausible body-weight values.
+     for(let dp=1;dp<n;dp++){
+      const num=Number(r.raw.slice(0,dp)+"."+r.raw.slice(dp));
+      if(!Number.isFinite(num)||num<=1||num>300)continue;
+      let score=r.confidence;
+      if(dp===n-1)score+=.04;
+      if(dp===n-2)score+=.02;
+      candidates.push({raw:r.raw,number:num,confidence:score,y,hh,dark});
      }
     }
    }
   }
  }
+
  if(!candidates.length)return null;
- candidates.sort((a,b)=>b.confidence-a.confidence);
- const top=candidates[0];
- // Require another nearby hypothesis to agree on the same reading.
- const same=candidates.filter(x=>x.raw===top.raw&&Math.abs(x.y-top.y)<Math.max(25,top.hh*.55));
- if(same.length<2&&top.confidence<.86)return null;
- return {raw:top.raw.replace(/^(\d{2})(\d)/,"$1.$2"),number:top.number};
+
+ // Cluster equal readings from many nearby searches.
+ const clusters=[];
+ for(const c of candidates){
+  let found=clusters.find(g=>Math.abs(g.number-c.number)<.001);
+  if(found)found.push(c);else clusters.push([c]);
+ }
+ clusters.sort((a,b)=>{
+  const sa=Math.max(...a.map(x=>x.confidence))+Math.min(.18,a.length*.025);
+  const sb=Math.max(...b.map(x=>x.confidence))+Math.min(.18,b.length*.025);
+  return sb-sa;
+ });
+ const best=clusters[0];
+ const top=best.reduce((a,b)=>b.confidence>a.confidence?b:a);
+ if(best.length<2&&top.confidence<.82)return null;
+ return {raw:top.raw,number:top.number};
 }
 
 async function scanScalePhoto(file){
