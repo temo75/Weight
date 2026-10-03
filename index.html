@@ -491,18 +491,59 @@ async function scanScalePhoto(file,manual=false){
       // 2) Normal numeric OCR fallback. This also handles non-LCD test images.
       try{
         const worker=await loadNumericOCR();
-        const numeric=makeNumericOCRImage(img);
-        const result=await worker.recognize(numeric);
-        const text=String(result?.data?.text||"")
-          .replace(/,/g,".")
-          .replace(/[^0-9.]/g,"")
-          .replace(/\.{2,}/g,".");
 
-        const matches=text.match(/\d{2,3}(?:\.\d{1,2})?/g)||[];
-        for(const s of matches){
-          const n=Number(s);
-          if(Number.isFinite(n)&&n>=30&&n<=250)
-            candidates.push({n,source:"numeric"});
+        const numericImages=[makeNumericOCRImage(img)];
+
+        // The number is normally in the middle of the captured frame.
+        // Use centered crops as well so background objects cannot become digits.
+        const W=img.naturalWidth,H=img.naturalHeight;
+        for(const box of [
+          [.12,.20,.76,.60],
+          [.18,.25,.64,.50],
+          [.08,.30,.84,.40]
+        ]){
+          const [x,y,w,h]=box;
+          const cv=document.createElement("canvas");
+          cv.width=1800;cv.height=700;
+          const g=cv.getContext("2d",{willReadFrequently:true});
+          g.imageSmoothingEnabled=true;
+          g.drawImage(img,Math.round(W*x),Math.round(H*y),Math.round(W*w),Math.round(H*h),0,0,cv.width,cv.height);
+          const im=g.getImageData(0,0,cv.width,cv.height);
+          for(let i=0;i<im.data.length;i+=4){
+            const v=Math.round(.299*im.data[i]+.587*im.data[i+1]+.114*im.data[i+2]);
+            const q=v<185?20:255;
+            im.data[i]=im.data[i+1]=im.data[i+2]=q;
+          }
+          g.putImageData(im,0,0);
+          numericImages.push(cv);
+        }
+
+        for(const numeric of numericImages){
+          try{
+            const result=await worker.recognize(numeric);
+            const raw=String(result?.data?.text||"")
+              .replace(/,/g,".")
+              .replace(/[^0-9.]/g,"")
+              .replace(/\.{2,}/g,".");
+
+            const matches=raw.match(/\d{2,3}(?:\.\d{1,2})?/g)||[];
+            for(const s of matches){
+              const n=Number(s);
+              if(Number.isFinite(n)&&n>=30&&n<=250)
+                candidates.push({n,source:"numeric"});
+            }
+
+            // OCR often drops the decimal point: 82.20 -> 8220.
+            const digits=raw.replace(/\./g,"");
+            if(/^\d{4}$/.test(digits)){
+              const n=Number(digits.slice(0,2)+"."+digits.slice(2));
+              if(n>=30&&n<=250)candidates.push({n,source:"numeric"});
+            }
+            if(/^\d{3}$/.test(digits)){
+              const n=Number(digits.slice(0,2)+"."+digits.slice(2));
+              if(n>=30&&n<=250)candidates.push({n,source:"numeric"});
+            }
+          }catch(_){}
         }
       }catch(e){
         console.warn("numeric OCR fallback",e);
