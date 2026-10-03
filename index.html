@@ -401,20 +401,17 @@ function parseWeightOCR(text){
 
   const candidates=[];
   const add=(value,priority=0)=>{
-    const n=Number(value);
+    const s=String(value).trim();
+    const n=Number(s);
     if(!Number.isFinite(n)||n<=0||n>300)return;
-    const s=Number.isInteger(n)
-      ? String(n)
-      : n.toFixed(2).replace(/0+$/,"").replace(/\.$/,"");
+    // Keep the OCR's decimal precision. 82.20 must stay 82.20.
     candidates.push({raw:s,number:n,priority});
   };
 
-  // OCR already found the decimal point.
-  for(const m of clean.match(/\b\d{1,3}(?:\.\d{1,2})?\b/g)||[]){
-    add(m,100);
-  }
+  // Already has the decimal point.
+  for(const m of clean.match(/\b\d{1,3}(?:\.\d{1,2})?\b/g)||[]) add(m,100);
 
-  // OCR may split the decimal: "76 10" -> 76.10, "87 7" -> 87.7.
+  // OCR sometimes separates the decimal: "82 20" -> "82.20".
   const parts=clean.trim().split(/\s+/).filter(Boolean);
   for(let i=0;i<parts.length-1;i++){
     if(/^\d{1,3}$/.test(parts[i]) && /^\d{1,2}$/.test(parts[i+1])){
@@ -422,27 +419,79 @@ function parseWeightOCR(text){
     }
   }
 
-  // OCR may lose the decimal completely: 877 -> 87.7, 8220 -> 82.20.
+  // Decimal point completely lost: 8220 -> 82.20, 7735 -> 77.35.
   for(const d of clean.match(/\b\d{4}\b/g)||[]){
-    const n2=Number(d.slice(0,2)+"."+d.slice(2));
-    if(n2>0&&n2<=300)add(n2.toFixed(2),90);
+    const n=Number(d.slice(0,2)+"."+d.slice(2));
+    if(n>0&&n<=300)add(d.slice(0,2)+"."+d.slice(2),90);
   }
+
+  // 3 digits with a missing decimal: 877 -> 87.7.
   for(const d of clean.match(/\b\d{3}\b/g)||[]){
     const n=Number(d);
     if(n<100)add(d.slice(0,2)+"."+d.slice(2),88);
   }
 
-  // Plain numeric fallback.
-  for(const m of clean.match(/\b\d{1,3}(?:\.\d{1,2})?\b/g)||[]){
-    add(m,50);
-  }
+  for(const m of clean.match(/\b\d{1,3}(?:\.\d{1,2})?\b/g)||[]) add(m,50);
 
   if(!candidates.length)return null;
   candidates.sort((a,b)=>
-    (b.priority-a.priority) ||
-    (String(b.raw).length-String(a.raw).length)
+    (b.priority-a.priority)||(String(b.raw).length-String(a.raw).length)
   );
   return candidates[0];
+}
+
+function parseWeightOverlay(json,canvas){
+  const words=[];
+  for(const result of (json.ParsedResults||[])){
+    const lines=result.TextOverlay?.Lines||[];
+    for(const line of lines){
+      const ws=line.Words||[];
+      for(const w of ws){
+        const text=String(w.WordText||"").trim();
+        if(!text)continue;
+        words.push({
+          text,
+          left:Number(w.Left)||0,
+          top:Number(w.Top)||0,
+          width:Number(w.Width)||0,
+          height:Number(w.Height)||0,
+          lineTop:Number(line.MinTop)||Number(w.Top)||0
+        });
+      }
+    }
+  }
+  if(!words.length)return null;
+
+  const W=canvas.width,H=canvas.height;
+  const numeric=words.filter(w=>/[0-9]/.test(w.text));
+
+  // Prefer the large, central LCD number over tiny labels such as
+  // "Max 150kg x 100g" printed on the scale.
+  const ranked=numeric.map(w=>{
+    const cx=w.left+w.width/2,cy=w.top+w.height/2;
+    const centrality=1-Math.min(1,Math.hypot(cx-W/2,cy-H/2)/(Math.hypot(W,H)/2));
+    const size=Math.max(1,w.height)*Math.max(1,w.width);
+    return {w,score:size*(0.65+0.35*centrality)};
+  }).sort((a,b)=>b.score-a.score);
+
+  for(const item of ranked.slice(0,8)){
+    const found=parseWeightOCR(item.w.text);
+    if(found)return found;
+  }
+
+  // If OCR split the LCD number into adjacent words, combine the largest
+  // nearby numeric words on the same line: "82" + "20" -> "82.20".
+  const big=ranked.slice(0,12).map(x=>x.w).sort((a,b)=>a.left-b.left);
+  for(let i=0;i<big.length-1;i++){
+    const a=big[i],b=big[i+1];
+    const sameLine=Math.abs(a.top-b.top)<=Math.max(a.height,b.height)*0.7;
+    const gap=b.left-(a.left+a.width);
+    if(sameLine&&gap>=-5&&gap<=Math.max(a.height,b.height)*1.5){
+      const joined=parseWeightOCR(a.text+" "+b.text);
+      if(joined)return joined;
+    }
+  }
+  return null;
 }
 
 async function recognizeWeightOCR(canvas){
@@ -454,7 +503,7 @@ async function recognizeWeightOCR(canvas){
   form.append("base64Image",canvas.toDataURL("image/jpeg",.95));
   form.append("language","auto");
   form.append("OCREngine","2");
-  form.append("isOverlayRequired","false");
+  form.append("isOverlayRequired","true");
   form.append("detectOrientation","true");
   form.append("scale","true");
 
@@ -474,18 +523,23 @@ async function recognizeWeightOCR(canvas){
     if(json.IsErroredOnProcessing)
       throw new Error(String(json.ErrorMessage||"OCR processing failed"));
 
+    // First use OCR-space's bounding boxes so small printed text elsewhere
+    // on the scale cannot beat the large LCD digits.
+    const overlayFound=parseWeightOverlay(json,canvas);
+    if(overlayFound)return overlayFound;
+
+    // Fallback to the full OCR text if overlay data is unavailable.
     const text=(json.ParsedResults||[])
       .map(x=>String(x.ParsedText||""))
-      .join("\\n");
-
+      .join("\n");
     const found=parseWeightOCR(text);
     if(!found)throw new Error("OCR-მ რიცხვი ვერ ამოიცნო");
-
     return found;
   }finally{
     clearTimeout(timer);
   }
 }
+
 function cropCameraFrame(video){
  const vw=video.videoWidth,vh=video.videoHeight,stage=video.parentElement,sw=stage.clientWidth,sh=stage.clientHeight;
  const scale=Math.max(sw/vw,sh/vh),dw=vw*scale,dh=vh*scale,ox=(dw-sw)/2,oy=(dh-sh)/2;
