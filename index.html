@@ -452,6 +452,36 @@ function makeTightSevenSegmentCrops(img){
   return crops;
 }
 
+async function recognizeWeightWithAI(dataUrl){
+  let endpoint=localStorage.getItem("TEMO_WEIGHT_AI_ENDPOINT")||"";
+  if(!endpoint){
+    endpoint=prompt("ერთხელ შეიყვანე AI Worker-ის მისამართი:");
+    if(!endpoint)return null;
+    endpoint=endpoint.trim().replace(/\/$/,"");
+    if(!endpoint)return null;
+    localStorage.setItem("TEMO_WEIGHT_AI_ENDPOINT",endpoint);
+  }
+
+  const response=await fetch(endpoint,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({image:dataUrl})
+  });
+
+  if(!response.ok)throw new Error("AI Worker HTTP "+response.status);
+  const data=await response.json();
+  const n=Number(data?.weight);
+  if(!Number.isFinite(n)||n<30||n>250)return null;
+
+  return {
+    number:n,
+    raw:String(data?.raw||n),
+    quality:1,
+    agreement:1,
+    source:"AI"
+  };
+}
+
 async function scanScalePhoto(file,manual=false){
   let url=null;
   try{
@@ -468,6 +498,27 @@ async function scanScalePhoto(file,manual=false){
     const candidates=[];
 
     if(manual){
+      // AI Vision is the primary reader for the captured photo.
+      try{
+        const aiUrl=document.getElementById("scanImage")?.src||"";
+        if(aiUrl.startsWith("data:image/")){
+          $("scanStatus").textContent="🤖 ფოტოს AI ვამოწმებ...";
+          const ai=await recognizeWeightWithAI(aiUrl);
+          if(ai)found=ai;
+        }
+      }catch(e){
+        console.warn("AI weight recognition",e);
+      }
+
+      if(found){
+        const weight=Number(found.number);
+        recognizedScanWeight=weight;
+        $("weightInput").value=String(found.raw||weight);
+        $("scanStatus").textContent="✅ AI-მ წონა დაფიქსირდა: "+(found.raw||weight)+" კგ";
+        $("saveBtn").click();
+        return;
+      }
+
       // 1) Specialized seven-segment OCR for real digital scales.
       try{
         const worker=await loadOCR();
