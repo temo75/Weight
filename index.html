@@ -180,7 +180,7 @@ async function loadOCR(){
         This worker uses a trained seven-segment model ("ssd_int").
         The model is specifically trained for digital seven-segment displays.
       */
-      ocrWorker=await Tesseract.createWorker("7seg",1,{
+      ocrWorker=await Tesseract.createWorker("ssd_int",1,{
         langPath:"https://raw.githubusercontent.com/Shreeshrii/tessdata_ssd/master",
         gzip:false,
         legacyCore:false,
@@ -409,15 +409,15 @@ async function scanScalePhoto(file,manual=false){
         const crops=makeSevenSegmentOCRImages(img);
         const candidates=[];
 
-        // Also read the original captured frame. This helps when the
-        // display is already clean and a crop would cut off a digit/dot.
+        // First try the complete captured frame.
         try{
           const original=await worker.recognize(img);
           const n=parseSevenOCR(original?.data?.text||"");
           if(Number.isFinite(n)) candidates.push(n);
         }catch(_){}
 
-        for(const item of crops){
+        // Then try only two strong crops so processing does not get stuck.
+        for(const item of crops.slice(0,2)){
           try{
             const result=await worker.recognize(item.image);
             const n=parseSevenOCR(result?.data?.text||"");
