@@ -162,7 +162,7 @@ async function loadOCR(){
   if(ocrWorker)return ocrWorker;
   if(ocrLoadPromise)return ocrLoadPromise;
 
-  $("scanStatus").textContent="📚 სპეციალური 7-segment OCR იტვირთება...";
+  $("scanStatus").textContent="📚 სასწორის სპეციალური 7-segment OCR იტვირთება...";
   ocrLoadPromise=(async()=>{
     try{
       if(!window.Tesseract){
@@ -180,11 +180,11 @@ async function loadOCR(){
         This worker uses a trained seven-segment model ("ssd_int").
         The model is specifically trained for digital seven-segment displays.
       */
-      ocrWorker=await Tesseract.createWorker("ssd_int",0,{
+      ocrWorker=await Tesseract.createWorker("7seg",1,{
         langPath:"https://raw.githubusercontent.com/Shreeshrii/tessdata_ssd/master",
         gzip:false,
-        legacyCore:true,
-        legacyLang:true
+        legacyCore:false,
+        legacyLang:false
       });
 
       await ocrWorker.setParameters({
@@ -355,21 +355,11 @@ async function scanScalePhoto(file){
 
     /*
       We now use TWO independent readers:
-      1) our seven-segment segment classifier;
-      2) a trained seven-segment Tesseract model.
+      A dedicated seven-segment trained Tesseract model is used.
+      Generic English OCR is not used.
       A single guess is NEVER accepted.
     */
     const votes=[];
-    const seven=readSevenSegmentCanvas(img);
-
-    if(seven && Number.isFinite(seven.number) && seven.score>=0.88){
-      votes.push({
-        value:Math.round(seven.number*10)/10,
-        source:"segments",
-        key:"segments"
-      });
-    }
-
     const worker=await loadOCR();
     const prepared=makeSevenSegmentOCRImages(img);
     const tight=makeTightSevenSegmentCrops(img);
@@ -380,7 +370,7 @@ async function scanScalePhoto(file){
     for(const image of allImages){
       for(const psm of [7,8,13]){
         pass++;
-        $("scanStatus").textContent="📖 ვამოწმებ LCD-ს... "+pass+"/"+(allImages.length*3);
+        $("scanStatus").textContent="📖 ვამოწმებ სასწორის ციფრებს... "+pass+"/"+(allImages.length*3);
 
         await worker.setParameters({
           tessedit_pageseg_mode:psm,
@@ -447,9 +437,8 @@ async function scanScalePhoto(file){
     const best=ranked[0];
 
     if(!best ||
-       best.trained<3 ||
-       best.keys.size<3 ||
-       (best.segment===false && best.trained<4)){
+       best.trained<4 ||
+       best.keys.size<4){
       /*
         Nothing is trusted.
         Remove the photo immediately and send the user back to the camera.
