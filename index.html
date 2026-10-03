@@ -379,78 +379,83 @@ function sevenSample(mask,x,y,w,h){
  return best;
 }
 
-let sevenTesseractWorker=null;
-let sevenTesseractLoading=null;
-async function loadSevenSegmentOCR(){
- if(sevenTesseractWorker)return sevenTesseractWorker;
- if(sevenTesseractLoading)return sevenTesseractLoading;
- sevenTesseractLoading=(async()=>{
+let scaleOCRWorker=null;
+let scaleOCRLoading=null;
+
+async function loadScaleOCR(){
+ if(scaleOCRWorker)return scaleOCRWorker;
+ if(scaleOCRLoading)return scaleOCRLoading;
+ scaleOCRLoading=(async()=>{
   if(!window.Tesseract){
    await new Promise((resolve,reject)=>{
-    const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
-    s.onload=resolve;s.onerror=()=>reject(new Error("Tesseract.js ვერ ჩაიტვირთა"));document.head.appendChild(s);
+    const s=document.createElement("script");
+    s.src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+    s.onload=resolve;s.onerror=()=>reject(new Error("OCR ვერ ჩაიტვირთა"));
+    document.head.appendChild(s);
    });
   }
-  const worker=await Tesseract.createWorker("ssd_int",1,{langPath:"https://cdn.jsdelivr.net/gh/Shreeshrii/tessdata_ssd@master/"});
-  await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"0123456789."});
-  sevenTesseractWorker=worker;return worker;
+  const worker=await Tesseract.createWorker("eng",1);
+  await worker.setParameters({
+   tessedit_pageseg_mode:"11",
+   tessedit_char_whitelist:"0123456789."
+  });
+  scaleOCRWorker=worker;
+  return worker;
  })();
- try{return await sevenTesseractLoading}finally{sevenTesseractLoading=null}
+ try{return await scaleOCRLoading}finally{scaleOCRLoading=null}
 }
-function sevenOCRPreprocess(dataUrl,box,mode){
+
+function scaleOCRImage(dataUrl){
  return new Promise((resolve,reject)=>{
   const img=new Image();
   img.onload=()=>{
-   const sx=Math.max(0,Math.round(img.naturalWidth*box[0])),sy=Math.max(0,Math.round(img.naturalHeight*box[1]));
-   const sw=Math.min(img.naturalWidth-sx,Math.round(img.naturalWidth*box[2])),sh=Math.min(img.naturalHeight-sy,Math.round(img.naturalHeight*box[3]));
-   if(sw<20||sh<20){reject(new Error("ROI too small"));return}
-   const scale=Math.min(4,Math.max(2,1200/sw)),cv=document.createElement("canvas");
-   cv.width=Math.max(1,Math.round(sw*scale));cv.height=Math.max(1,Math.round(sh*scale));
-   const ctx=cv.getContext("2d",{willReadFrequently:true});ctx.drawImage(img,sx,sy,sw,sh,0,0,cv.width,cv.height);
-   if(mode!==0){
-    const id=ctx.getImageData(0,0,cv.width,cv.height),p=id.data;
-    for(let i=0;i<p.length;i+=4){
-     const g=.2126*p[i]+.7152*p[i+1]+.0722*p[i+2];let v=g;
-     if(mode===1)v=g<165?35:245;if(mode===2)v=g<205?25:255;if(mode===3)v=255-g;
-     p[i]=p[i+1]=p[i+2]=v;
-    }
-    ctx.putImageData(id,0,0);
-   }
+   const cv=document.createElement("canvas");
+   const maxW=1800,scale=Math.min(1, maxW/img.naturalWidth);
+   cv.width=Math.max(1,Math.round(img.naturalWidth*scale));
+   cv.height=Math.max(1,Math.round(img.naturalHeight*scale));
+   const ctx=cv.getContext("2d");
+   ctx.drawImage(img,0,0,cv.width,cv.height);
    resolve(cv.toDataURL("image/png"));
   };
-  img.onerror=()=>reject(new Error("image load failed"));img.src=dataUrl;
+  img.onerror=()=>reject(new Error("სურათი ვერ ჩაიტვირთა"));
+  img.src=dataUrl;
  });
 }
-function sevenNormalizeOCRText(text){
- const t=String(text||"").replace(/[OoQ]/g,"0").replace(/[Il|]/g,"1").replace(/,/g,".").replace(/\s+/g,"");
- const matches=t.match(/\d{1,3}(?:\.\d{1,2})?/g)||[],out=[];
- for(const m of matches){
-  const n=Number(m);
+
+function scaleOCRCandidates(data){
+ const words=(data?.words||[]).map(w=>({
+  text:String(w.text||"").replace(/,/g,".").trim(),
+  confidence:Number(w.confidence||0),
+  box:w.bbox||null
+ })).filter(w=>/^\d{1,3}(?:\.\d{1,2})?$/.test(w.text));
+
+ const out=[];
+ for(const w of words){
+  const n=Number(w.text);
   if(!Number.isFinite(n)||n<=1||n>300)continue;
-  if(!m.includes(".")&&m.length>=3){
-   const a=Number(m.slice(0,-1)+"."+m.slice(-1));if(a>1&&a<=300)out.push({raw:m.slice(0,-1)+"."+m.slice(-1),number:a});
-  }else out.push({raw:m,number:n});
+  const box=w.box||{};
+  const area=Math.max(1,(box.x1-box.x0)*(box.y1-box.y0));
+  out.push({raw:w.text,number:n,confidence:w.confidence,area});
  }
  return out;
 }
+
 async function recognizeWeightSevenSegment(dataUrl){
- const worker=await loadSevenSegmentOCR(),rois=[
-  [.04,.35,.92,.42],[.08,.40,.84,.34],[.12,.44,.76,.30],[.14,.48,.72,.26],
-  [.18,.50,.64,.23],[.10,.52,.80,.22],[.06,.46,.88,.25],[0,.30,1,.45]
- ],results=[];
- for(const roi of rois)for(const mode of [0,1,2,3]){
-  try{
-   const image=await sevenOCRPreprocess(dataUrl,roi,mode),r=await worker.recognize(image);
-   results.push(...sevenNormalizeOCRText(r?.data?.text));
-  }catch(e){}
+ const worker=await loadScaleOCR();
+ const image=await scaleOCRImage(dataUrl);
+ const r=await worker.recognize(image);
+ let candidates=scaleOCRCandidates(r?.data);
+ if(!candidates.length){
+  const r2=await worker.recognize(dataUrl);
+  candidates=scaleOCRCandidates(r2?.data);
  }
- if(!results.length)return null;
- const clusters=[];
- for(const r of results){const g=clusters.find(x=>Math.abs(x.number-r.number)<.001);if(g)g.push(r);else clusters.push([r])}
- clusters.sort((a,b)=>b.length-a.length);
- if(clusters[0].length<2)return null;
- return clusters[0][0];
+ if(!candidates.length)return null;
+
+ // აიღე ფოტოზე ყველაზე დიდი ამოცნობილი რიცხვი.
+ candidates.sort((a,b)=>(b.area*b.confidence)-(a.area*a.confidence));
+ return candidates[0];
 }
+
 async function scanScalePhoto(file){
  try{
   const dataUrl=await fileToDataUrl(file);
