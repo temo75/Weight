@@ -408,6 +408,15 @@ async function scanScalePhoto(file,manual=false){
         const worker=await loadOCR();
         const crops=makeSevenSegmentOCRImages(img);
         const candidates=[];
+
+        // Also read the original captured frame. This helps when the
+        // display is already clean and a crop would cut off a digit/dot.
+        try{
+          const original=await worker.recognize(img);
+          const n=parseSevenOCR(original?.data?.text||"");
+          if(Number.isFinite(n)) candidates.push(n);
+        }catch(_){}
+
         for(const item of crops){
           try{
             const result=await worker.recognize(item.image);
@@ -494,7 +503,7 @@ function captureCurrentCameraFrame(manual=false){
     setTimeout(()=>{
       $("scanImage").removeAttribute("src");
       $("scanPreview").style.display="none";
-      $("scanStatus").textContent="";
+      // Do not clear scanStatus here: OCR may still be processing.
     },5000);
   }
 
