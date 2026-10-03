@@ -482,21 +482,22 @@ function captureCurrentCameraFrame(manual=false){
   cv.height=Math.max(350,Math.round(sh*2));
   cv.getContext("2d").drawImage(video,sx,sy,sw,sh,0,0,cv.width,cv.height);
 
-  // Manual capture: show the exact captured photo on the page immediately.
-  // The camera window closes after 1 second; the photo remains for 5 seconds.
+  // Manual capture: show the exact captured photo immediately.
+  // Close the camera window immediately; keep the photo on the page for 5 seconds.
   if(manual){
     $("scanImage").src=cv.toDataURL("image/jpeg",.92);
     $("scanPreview").style.display="block";
     $("scanStatus").textContent="📸 ფოტო დაფიქსირდა — ვამუშავებ...";
-    setTimeout(()=>closeCamera(),1000);
+    closeCamera();
     setTimeout(()=>{
       $("scanImage").removeAttribute("src");
       $("scanPreview").style.display="none";
+      $("scanStatus").textContent="";
     },5000);
   }
 
   cv.toBlob(blob=>{
-    if(!blob||!cameraStream)return;
+    if(!blob||(!cameraStream&&!manual))return;
     if(autoScanBusy&&!manual)return;
     autoScanBusy=true;
 
