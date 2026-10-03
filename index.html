@@ -258,8 +258,10 @@ function readScaleDisplayDirect(img){
     }
     const votes=[];for(const t of thresholds)for(const inv of [false,true]){const v=classify(t,inv);if(v)votes.push(v)}
     const tally=new Map();for(const v of votes){const k=v.number.toFixed(2);tally.set(k,(tally.get(k)||0)+1)}
-    const winner=[...tally].sort((a,b)=>b[1]-a[1])[0];if(!winner||winner[1]<2)return null;
-    const v=votes.find(x=>x.number.toFixed(2)===winner[0]);return {...v,agreement:winner[1]};
+    const winner=[...tally].sort((a,b)=>b[1]-a[1])[0];if(!winner)return null;
+    const v=votes.find(x=>x.number.toFixed(2)===winner[0]);
+    if(!v||v.quality<.22)return null;
+    return {...v,agreement:winner[1]};
   }catch(e){console.warn("seven-segment recognition",e);return null}
 }
 function normalizeSevenOCR(text){
