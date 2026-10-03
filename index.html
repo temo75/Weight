@@ -292,10 +292,10 @@ function sevenReadROI(cv){
  for(let dh=Math.round(h*.32);dh<=Math.round(h*.70);dh+=Math.max(8,Math.round(h*.09))){
    for(let y=Math.round(h*.12);y<=Math.round(h*.58);y+=Math.max(8,Math.round(h*.07))){
      const pos=sevenDetectPositions(g,w,h,y,dh,Math.max(24,Math.round(w*.075)));
-     if(pos.length!==4)continue;
+     if(pos.length!==4&&pos.length!==3)continue;
      const cls=pos.map(p=>sevenClassify(sevenZones(g,w,h,p.x,y,p.w,dh)));
      if(cls.some(c=>c.char==="?"))continue;
-     const avg=cls.reduce((a,c)=>a+c.score,0)/4;
+     const avg=cls.reduce((a,c)=>a+c.score,0)/cls.length;
      
      // Weight display expected form is DD.D: decimal between second and third digit.
      const reading=cls[0].char+cls[1].char+"."+cls[2].char;
