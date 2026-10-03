@@ -500,6 +500,20 @@ async function openCamera(){
     cameraTrack=cameraStream.getVideoTracks()[0];
 
     const caps=cameraTrack.getCapabilities?cameraTrack.getCapabilities():{};
+
+    // Lower the camera exposure when the scale's bright sensor plates reflect light.
+    // This keeps the LCD digits darker and reduces glare without changing the camera preview UI.
+    if(caps.exposureCompensation&&cameraTrack.applyConstraints){
+      try{
+        const emin=Number(caps.exposureCompensation.min);
+        const emax=Number(caps.exposureCompensation.max);
+        if(Number.isFinite(emin)&&Number.isFinite(emax)){
+          const target=Math.max(emin,Math.min(-1,emax));
+          await cameraTrack.applyConstraints({advanced:[{exposureCompensation:target}]});
+        }
+      }catch(_){}
+    }
+
     const zoom=$("zoomControl"),zv=$("zoomValue");
 
     if(caps.zoom){
