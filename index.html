@@ -292,19 +292,19 @@ function sevenReadROI(cv){
  for(let dh=Math.round(h*.32);dh<=Math.round(h*.70);dh+=Math.max(8,Math.round(h*.09))){
    for(let y=Math.round(h*.12);y<=Math.round(h*.58);y+=Math.max(8,Math.round(h*.07))){
      const pos=sevenDetectPositions(g,w,h,y,dh,Math.max(24,Math.round(w*.075)));
-     if(pos.length!==3)continue;
+     if(pos.length!==4)continue;
      const cls=pos.map(p=>sevenClassify(sevenZones(g,w,h,p.x,y,p.w,dh)));
      if(cls.some(c=>c.char==="?"))continue;
-     const avg=cls.reduce((a,c)=>a+c.score,0)/3;
-     const dot=sevenDot(g,w,h,pos[1].x+pos[1].w,pos[2].x,y,dh);
+     const avg=cls.reduce((a,c)=>a+c.score,0)/4;
+     
      // Weight display expected form is DD.D: decimal between second and third digit.
      const reading=cls[0].char+cls[1].char+"."+cls[2].char;
      const num=Number(reading);
-     if(Number.isFinite(num)&&num>=20&&num<=300)candidates.push({reading,num,score:avg,dot});
+     if(Number.isFinite(num)&&num>=20&&num<=300)candidates.push({reading,num,score:avg});
    }
  }
  if(!candidates.length)return null;
- candidates.sort((a,b)=>(Number(b.dot)-Number(a.dot))*.25+b.score-(Number(a.dot)-Number(b.dot))*.25-a.score);
+ candidates.sort((a,b)=>b.score-a.score);
  return candidates[0];
 }
 
