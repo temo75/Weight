@@ -439,12 +439,23 @@ async function scanScalePhoto(file,manual=false){
     $("weightInput").value=String(weight);
     $("scanStatus").textContent="✅ დაფიქსირდა: "+(found.raw||weight)+" კგ — ვინახავ...";
 
-    // Save immediately, then turn the camera off immediately.
+    // Keep the captured photo visible on the web page for 3 seconds.
+    const photoCanvas=document.createElement("canvas");
+    photoCanvas.width=img.naturalWidth||img.width;
+    photoCanvas.height=img.naturalHeight||img.height;
+    photoCanvas.getContext("2d").drawImage(img,0,0,photoCanvas.width,photoCanvas.height);
+    $("scanImage").src=photoCanvas.toDataURL("image/jpeg",.92);
+    $("scanPreview").style.display="block";
+
+    // Save immediately. Close only the camera window after 1 second.
     $("saveBtn").click();
     setTimeout(()=>closeCamera(),1000);
 
-    $("scanImage").removeAttribute("src");
-    $("scanPreview").style.display="none";
+    // Remove the saved preview after 3 seconds.
+    setTimeout(()=>{
+      $("scanImage").removeAttribute("src");
+      $("scanPreview").style.display="none";
+    },3000);
     $("scanResult").style.display="none";
   }catch(e){
     if(url)URL.revokeObjectURL(url);
