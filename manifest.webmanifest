@@ -1,0 +1,11 @@
+{
+  "name":"TEMO WEIGHT",
+  "short_name":"TEMO",
+  "start_url":"/weight/",
+  "display":"standalone",
+  "background_color":"#07111d",
+  "theme_color":"#087ff5",
+  "icons":[
+    {"src":"/weight/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}
