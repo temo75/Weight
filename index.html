@@ -396,27 +396,26 @@ async function scanScalePhoto(file,manual=false){
   try{
     const img=await new Promise((resolve,reject)=>{
       const im=new Image(); im.onload=()=>resolve(im); im.onerror=reject;
-      url=URL.createObjectURL(file); im.src=url;
+      url=URL.createObjectURL(file); im.src=im;
     });
     if(url){URL.revokeObjectURL(url);url=null}
 
-    let found=readScaleDisplayDirect(img);
+    let found=null;
 
-    // Manual capture: if the fast reader is not certain, use several OCR crops.
-    if((!found || found.quality<.30) && manual){
+    // Manual capture: OCR first. The direct segment reader can sometimes
+    // invent an extra digit on a perspective/blurred photo.
+    if(manual){
       try{
         const worker=await loadOCR();
         const crops=makeSevenSegmentOCRImages(img);
         const candidates=[];
 
-        // First try the complete captured frame.
         try{
           const original=await worker.recognize(img);
           const n=parseSevenOCR(original?.data?.text||"");
           if(Number.isFinite(n)) candidates.push(n);
         }catch(_){}
 
-        // Then try only two strong crops so processing does not get stuck.
         for(const item of crops.slice(0,2)){
           try{
             const result=await worker.recognize(item.image);
@@ -424,20 +423,34 @@ async function scanScalePhoto(file,manual=false){
             if(Number.isFinite(n)) candidates.push(n);
           }catch(_){}
         }
+
         if(candidates.length){
           const counts=new Map();
           for(const n of candidates){
-            const k=n.toFixed(1);
+            const k=n.toFixed(2);
             counts.set(k,(counts.get(k)||0)+1);
           }
-          const best=[...counts.entries()].sort((x,y)=>y[1]-x[1])[0];
-          found={number:Number(best[0]),raw:best[0],quality:.50,agreement:best[1]};
+          const best=[...counts.entries()].sort((a,b)=>b[1]-a[1])[0];
+          const second=[...counts.entries()].sort((a,b)=>b[1]-a[1])[1];
+          // Prefer a repeated OCR result. If only one result exists,
+          // accept it only when it is a normal scale value.
+          if(best && (best[1]>=2 || !second)){
+            found={number:Number(best[0]),raw:best[0],quality:.80,agreement:best[1]};
+          }
         }
-      }catch(e){console.warn("manual OCR fallback",e)}
+      }catch(e){
+        console.warn("manual OCR",e);
+      }
+    }
+
+    // Direct seven-segment reader is only the fallback.
+    if(!found){
+      const direct=readScaleDisplayDirect(img);
+      if(direct && direct.quality>=.35 && direct.agreement>=2) found=direct;
     }
 
     if(!found || !Number.isFinite(found.number)){
-      $("scanStatus").textContent="❌ ფოტოდან წონა ვერ ამოვიცანი — გადაიღე ეკრანი უფრო ახლოდან.";
+      $("scanStatus").textContent="❌ ფოტოდან წონა ვერ ამოვიცანი — გადაიღე ციფრები ჩარჩოს ცენტრში.";
       return;
     }
 
@@ -448,10 +461,8 @@ async function scanScalePhoto(file,manual=false){
     }
 
     recognizedScanWeight=weight;
-    $("weightInput").value=String(weight);
+    $("weightInput").value=String(found.raw||weight);
     $("scanStatus").textContent="✅ წონა დაფიქსირდა: "+(found.raw||weight)+" კგ";
-
-    // Save the exact recognized number.
     $("saveBtn").click();
   }catch(e){
     if(url)URL.revokeObjectURL(url);
