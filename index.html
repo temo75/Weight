@@ -526,6 +526,9 @@ async function scanScalePhoto(file,manual=false){
               .replace(/[^0-9.]/g,"")
               .replace(/\.{2,}/g,".");
 
+            // Keep the decimal point as part of the OCR result.
+            // For a weight photo, a 4-digit result such as 8220 is interpreted
+            // only as 82.20; it is never accepted as 8220 kg or another value.
             const matches=raw.match(/\d{2,3}(?:\.\d{1,2})?/g)||[];
             for(const s of matches){
               const n=Number(s);
@@ -533,16 +536,16 @@ async function scanScalePhoto(file,manual=false){
                 candidates.push({n,source:"numeric"});
             }
 
-            // OCR often drops the decimal point: 82.20 -> 8220.
+            // If OCR drops the dot, restore it only in the natural
+            // two-digits + two-decimals form: 8220 -> 82.20.
             const digits=raw.replace(/\./g,"");
             if(/^\d{4}$/.test(digits)){
               const n=Number(digits.slice(0,2)+"."+digits.slice(2));
               if(n>=30&&n<=250)candidates.push({n,source:"numeric"});
             }
-            if(/^\d{3}$/.test(digits)){
-              const n=Number(digits.slice(0,2)+"."+digits.slice(2));
-              if(n>=30&&n<=250)candidates.push({n,source:"numeric"});
-            }
+
+            // Do not invent a decimal for 3 digits here; that can turn
+            // a correctly read integer into the wrong weight.
           }catch(_){}
         }
       }catch(e){
