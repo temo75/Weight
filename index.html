@@ -156,206 +156,168 @@ function render(){
 }
 /*
   Local seven-segment reader.
-  Based on the open-source seven-seg-ocr approach:
-  gradient edge digit detection + 3x3 zone signatures + correlation.
-  No Tesseract and no network/API call for scale photos.
+  Browser-only: Otsu thresholding + polarity testing + segment sampling.
+  No Tesseract, AI, API or image upload.
 */
-const SEVEN_ZONES=["TL","TC","TR","ML","MC","MR","BL","BC","BR"];
-const SEVEN_DIGITS=["0","1","2","3","4","5","6","7","8","9"];
-const SEVEN_SIG={
- "0":[.7,1,.7,.7,.15,.7,.7,1,.7],
- "1":[.1,.1,.7,.1,.1,.7,.1,.1,.7],
- "2":[.15,1,.7,.2,1,.5,.7,1,.15],
- "3":[.15,1,.7,.2,1,.7,.15,1,.7],
- "4":[.7,.3,.7,.7,1,.7,.1,.2,.7],
- "5":[.7,1,.15,.7,1,.7,.1,1,.7],
- "6":[.7,1,.15,.7,1,.5,.7,1,.7],
- "7":[.1,1,.7,.1,.1,.7,.1,.1,.7],
- "8":[.7,1,.7,.7,1,.7,.7,1,.7],
- "9":[.7,1,.7,.7,1,.7,.1,1,.7]
+const SEVEN_DIGIT_MASKS={
+ "0":[1,1,1,0,1,1,1],"1":[0,0,1,0,0,1,0],
+ "2":[1,0,1,1,1,0,1],"3":[1,0,1,1,0,1,1],
+ "4":[0,1,1,1,0,1,0],"5":[1,1,0,1,0,1,1],
+ "6":[1,1,0,1,1,1,1],"7":[1,0,1,0,0,1,0],
+ "8":[1,1,1,1,1,1,1],"9":[1,1,1,1,0,1,1]
 };
 
-function sevenGrayFromCanvas(cv){
- const w=cv.width,h=cv.height,c=cv.getContext("2d",{willReadFrequently:true});
- const d=c.getImageData(0,0,w,h).data,g=new Float32Array(w*h);
- for(let i=0,p=0;i<d.length;i+=4,p++)g[p]=(0.299*d[i]+0.587*d[i+1]+0.114*d[i+2])/255;
- return {g,w,h};
+function sevenLoadImage(dataUrl){
+ return new Promise((resolve,reject)=>{
+  const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=dataUrl;
+ });
 }
-
-function sevenDetectPositions(g,w,h,y,dh,windowW=42){
- const y1=Math.max(0,y),y2=Math.min(h,y+dh);
- const proj=new Float32Array(w);
- for(let x=0;x<w;x++){let sum=0;for(let yy=y1;yy<y2;yy++)sum+=g[yy*w+x];proj[x]=sum/Math.max(1,y2-y1)}
- const sm=new Float32Array(w);
- for(let x=1;x<w-1;x++)sm[x]=(proj[x-1]+proj[x]+proj[x+1])/3;
- const grad=new Float32Array(w);
- for(let x=1;x<w-1;x++)grad[x]=sm[x+1]-sm[x-1];
- const left=[],right=[];
- for(let x=3;x<w-3;x++){
-   if(grad[x]>.006&&grad[x]>=grad[x-1]&&grad[x]>=grad[x+1]&&grad[x]>=grad[x-2]&&grad[x]>=grad[x+2])left.push([x,grad[x]]);
-   if(grad[x]<-.006&&grad[x]<=grad[x-1]&&grad[x]<=grad[x+1]&&grad[x]<=grad[x-2]&&grad[x]<=grad[x+2])right.push([x,-grad[x]]);
- }
- left.sort((a,b)=>b[1]-a[1]);
- const used=new Set(),pairs=[];
- for(const [lx] of left){
-   let best=null;
-   for(const [rx,str] of right){
-     if(used.has(rx))continue;
-     const ww=rx-lx;
-     if(ww>=Math.max(18,windowW*.35)&&ww<=windowW*1.25){
-       if(!best||ww<best[1])best=[rx,ww,str];
-     }
-   }
-   if(best){used.add(best[0]);pairs.push([lx,best[0],best[1]]);}
- }
- pairs.sort((a,b)=>a[0]-b[0]);
- const filtered=[];
- for(const p of pairs){
-   if(!filtered.length||p[0]-(filtered.at(-1)[0]+filtered.at(-1)[2])<windowW*.8)filtered.push(p);
- }
- if(filtered.length<3)return [];
- // Try contiguous groups of exactly three, preferring similar widths and spacing.
- const groups=[];
- for(let i=0;i<=filtered.length-3;i++){
-   const q=filtered.slice(i,i+3), widths=q.map(p=>p[2]),avg=widths.reduce((a,b)=>a+b,0)/3;
-   const gaps=[q[1][0]-q[0][1],q[2][0]-q[1][1]];
-   const gapDiff=Math.abs(gaps[0]-gaps[1]);
-   const widthDiff=Math.max(...widths)-Math.min(...widths);
-   groups.push({q,score:avg-gapDiff*.7-widthDiff*.5});
- }
- groups.sort((a,b)=>b.score-a.score);
- const q=groups[0]?.q;
- if(!q)return [];
- return q.map(p=>({x:Math.max(0,Math.round((p[0]+p[1])/2-windowW/2)),w:Math.min(windowW,w-Math.max(0,Math.round((p[0]+p[1])/2-windowW/2)))}));
+function sevenGray(cv){
+ const d=cv.getContext("2d",{willReadFrequently:true}).getImageData(0,0,cv.width,cv.height).data;
+ const g=new Uint8Array(cv.width*cv.height);
+ for(let i=0,p=0;i<d.length;i+=4,p++)g[p]=Math.round(.2126*d[i]+.7152*d[i+1]+.0722*d[i+2]);
+ return {g,w:cv.width,h:cv.height};
 }
-
-function sevenZones(g,w,h,x,y,dw,dh){
- const out=[];
- const zw=Math.max(1,Math.floor(dw/3)),zh=Math.max(1,Math.floor(dh/3));
- for(let i=0;i<9;i++){
-   const row=Math.floor(i/3),col=i%3;
-   const x1=Math.max(0,x+col*zw),x2=Math.min(w,x+(col===2?dw:(col+1)*zw));
-   const y1=Math.max(0,y+row*zh),y2=Math.min(h,y+(row===2?dh:(row+1)*zh));
-   let sum=0,n=0;
-   for(let yy=y1;yy<y2;yy++)for(let xx=x1;xx<x2;xx++){sum+=g[yy*w+xx];n++}
-   out.push(n?sum/n:0);
+function sevenOtsu(g){
+ const hist=new Uint32Array(256);for(const v of g)hist[v]++;
+ let sum=0,total=g.length;
+ for(let i=0;i<256;i++)sum+=i*hist[i];
+ let sumB=0,wB=0,max=0,t=127;
+ for(let i=0;i<256;i++){
+  wB+=hist[i];if(!wB)continue;const wF=total-wB;if(!wF)break;
+  sumB+=i*hist[i];const mB=sumB/wB,mF=(sum-sumB)/wF;
+  const between=wB*wF*(mB-mF)*(mB-mF);
+  if(between>max){max=between;t=i}
  }
- return out;
+ return t;
 }
-
-function sevenClassify(z){
- const mn=Math.min(...z),mx=Math.max(...z);
- if(mx-mn<.035)return {char:"?",score:0};
- const oc=z.reduce((a,b)=>a+b,0)/9;
- const on=z.map(v=>v-oc),onorm=Math.sqrt(on.reduce((a,b)=>a+b*b,0));
- let best={char:"?",score:-99};
- for(const ch of SEVEN_DIGITS){
-   const e=SEVEN_SIG[ch],ec=e.reduce((a,b)=>a+b,0)/9,ev=e.map(v=>v-ec);
-   const enorm=Math.sqrt(ev.reduce((a,b)=>a+b*b,0));
-   let corr=onorm>1e-6?on.reduce((sum,v,i)=>sum+v*ev[i],0)/(onorm*enorm):0;
-   let boost=0;
-   const bc=z[7]>.6,tr=z[2]>.6,tl=z[0]<.35,bl=z[6]>.65,mc=z[4]>.6;
-   if(bc&&e[7]<.3)boost-=.7;else if(bc&&e[7]>.7)boost+=.3;
-   if(tr&&e[2]<.2)boost-=.5;else if(tr&&e[2]>.6)boost+=.2;
-   if(tl&&e[0]>.5)boost-=.3;
-   if(z[0]>.5&&e[0]<.2)boost-=.7;
-   if(z[4]<.3&&e[4]>.5)boost-=.4;
-   if(mc&&e[4]<.2)boost-=.9;
-   if(bl&&e[6]<.2)boost-=.5;else if(bl&&e[6]>.5)boost+=.2;
-   const score=Math.max(-1,Math.min(1,corr+boost));
-   if(score>best.score)best={char:ch,score};
+function sevenBinary(g,w,h,t,invert){
+ const b=new Uint8Array(w*h);
+ for(let i=0;i<g.length;i++)b[i]=invert?(g[i]<t?1:0):(g[i]>=t?1:0);
+ return b;
+}
+function sevenSmooth(a,r=2){
+ const o=new Float32Array(a.length);
+ for(let i=0;i<a.length;i++){
+  let s=0,n=0;
+  for(let j=Math.max(0,i-r);j<=Math.min(a.length-1,i+r);j++){s+=a[j];n++}
+  o[i]=s/n;
+ }
+ return o;
+}
+function sevenBestBand(b,w,h){
+ const rows=new Float32Array(h);
+ for(let y=0;y<h;y++){let s=0;for(let x=0;x<w;x++)s+=b[y*w+x];rows[y]=s/w}
+ const sm=sevenSmooth(rows,Math.max(2,Math.round(h*.015)));
+ let best=null,minH=Math.max(18,Math.round(h*.16)),maxH=Math.min(Math.round(h*.72),h-4);
+ for(let y=0;y<h-minH;y+=3){
+  for(const hh of [minH,Math.round((minH+maxH)/2),maxH]){
+   if(y+hh>h)continue;let s=0;
+   for(let yy=y;yy<y+hh;yy++)s+=sm[yy];
+   const density=s/hh,score=density-Math.abs(density-.20)*.18;
+   if(!best||score>best.score)best={y,h:hh,score};
+  }
  }
  return best;
 }
-
-function sevenDot(g,w,h,x1,x2,y,dh){
- const cx=Math.round((x1+x2)/2),cy=Math.round(y+dh*.84),r=Math.max(4,Math.round(dh*.12));
- let center=0,n=0,edge=0,en=0;
- for(let yy=Math.max(0,cy-r);yy<Math.min(h,cy+r+1);yy++)for(let xx=Math.max(0,cx-r);xx<Math.min(w,cx+r+1);xx++){
-   const v=g[yy*w+xx];center=Math.max(center,v);n++;
-   if(Math.abs(xx-cx)>r*.55||Math.abs(yy-cy)>r*.55){edge+=v;en++}
+function sevenColumnGroups(b,w,h,y,hh){
+ const col=new Float32Array(w);
+ for(let x=0;x<w;x++){let s=0;for(let yy=y;yy<y+hh;yy++)s+=b[yy*w+x];col[x]=s/hh}
+ const sm=sevenSmooth(col,Math.max(1,Math.round(w*.004)));
+ const mx=Math.max(...sm),mn=Math.min(...sm),cut=Math.max(.045,Math.min(.22,(mx-mn)*.16));
+ const groups=[];let start=-1,minW=Math.max(5,Math.round(w*.012));
+ for(let x=0;x<w;x++){
+  if(sm[x]>cut){if(start<0)start=x}
+  else if(start>=0){if(x-start>=minW)groups.push([start,x]);start=-1}
  }
- return n>0&&center>(edge/Math.max(1,en))*1.25;
+ if(start>=0&&w-start>=minW)groups.push([start,w]);
+ const merged=[];
+ for(const q of groups){const p=merged.at(-1);if(p&&q[0]-p[1]<Math.max(3,Math.round(w*.012)))p[1]=q[1];else merged.push(q.slice())}
+ return merged.filter(q=>q[1]-q[0]>=Math.round(w*.035)&&q[1]-q[0]<=Math.round(w*.28));
 }
-
-function sevenMakeROI(img,box,outW=1000,outH=500){
- const [x,y,w,h]=box,W=img.naturalWidth,H=img.naturalHeight;
+function sevenSampleSegment(b,w,h,x,y,dw,dh,i){
+ const q=[
+  [x+dw*.20,y+dh*.05,dw*.60,dh*.14],
+  [x+dw*.05,y+dh*.18,dw*.14,dh*.29],
+  [x+dw*.81,y+dh*.18,dw*.14,dh*.29],
+  [x+dw*.20,y+dh*.43,dw*.60,dh*.14],
+  [x+dw*.05,y+dh*.53,dw*.14,dh*.29],
+  [x+dw*.81,y+dh*.53,dw*.14,dh*.29],
+  [x+dw*.20,y+dh*.81,dw*.60,dh*.14]
+ ][i];
+ let on=0,n=0;
+ for(let yy=Math.max(0,Math.floor(q[1]));yy<Math.min(h,Math.ceil(q[1]+q[3]));yy++)
+  for(let xx=Math.max(0,Math.floor(q[0]));xx<Math.min(w,Math.ceil(q[0]+q[2]));xx++){on+=b[yy*w+xx];n++}
+ return n?on/n:0;
+}
+function sevenClassifyDigit(s){
+ let best={char:"?",score:-1};
+ for(const ch in SEVEN_DIGIT_MASKS){
+  const m=SEVEN_DIGIT_MASKS[ch];let score=0;
+  for(let i=0;i<7;i++)score+=m[i]?s[i]:(1-s[i]);
+  score/=7;if(score>best.score)best={char:ch,score};
+ }
+ return best;
+}
+function sevenReadBinary(b,w,h){
+ const band=sevenBestBand(b,w,h);if(!band)return null;
+ const groups=sevenColumnGroups(b,w,h,band.y,band.h);if(groups.length<2)return null;
+ const candidates=[];
+ for(let start=0;start<groups.length;start++)for(let count=2;count<=Math.min(4,groups.length-start);count++){
+  const q=groups.slice(start,start+count),widths=q.map(v=>v[1]-v[0]),avg=widths.reduce((a,v)=>a+v,0)/count;
+  const spread=Math.max(...widths)-Math.min(...widths);if(spread>avg*.75)continue;
+  const chars=[];let conf=0;
+  for(const [x1,x2] of q){
+   const dw=x2-x1,s=Array.from({length:7},(_,i)=>sevenSampleSegment(b,w,h,x1,band.y,dw,band.h,i));
+   const c=sevenClassifyDigit(s);chars.push(c.char);conf+=c.score;
+  }
+  conf/=count;const raw=chars.join(""),num=Number(raw);
+  if(Number.isFinite(num)&&num>=20&&num<=500)candidates.push({raw,number:num,confidence:conf,spread});
+ }
+ if(!candidates.length)return null;candidates.sort((a,b)=>b.confidence-a.confidence);return candidates[0];
+}
+function sevenTryROI(cv){
+ const {g,w,h}=sevenGray(cv),t=sevenOtsu(g),v=[
+  sevenBinary(g,w,h,t,false),sevenBinary(g,w,h,t,true),
+  sevenBinary(g,w,h,Math.max(35,t-25),false),sevenBinary(g,w,h,Math.min(235,t+25),false),
+  sevenBinary(g,w,h,Math.max(35,t-25),true),sevenBinary(g,w,h,Math.min(235,t+25),true)
+ ];
+ const out=[];for(const b of v){const r=sevenReadBinary(b,w,h);if(r)out.push(r)}
+ if(!out.length)return null;out.sort((a,b)=>b.confidence-a.confidence);return out[0];
+}
+function sevenMakeROI(img,box,outW=900,outH=500){
  const cv=document.createElement("canvas");cv.width=outW;cv.height=outH;
- cv.getContext("2d").drawImage(img,Math.round(W*x),Math.round(H*y),Math.round(W*w),Math.round(H*h),0,0,outW,outH);
+ const [x,y,w,h]=box;cv.getContext("2d").drawImage(img,
+  Math.round(img.naturalWidth*x),Math.round(img.naturalHeight*y),
+  Math.round(img.naturalWidth*w),Math.round(img.naturalHeight*h),0,0,outW,outH);
  return cv;
 }
-
-function sevenReadROI(cv){
- const {g,w,h}=sevenGrayFromCanvas(cv);
- const candidates=[];
- // Search several digit bands; the best 3-digit geometry wins.
- for(let dh=Math.round(h*.32);dh<=Math.round(h*.70);dh+=Math.max(8,Math.round(h*.09))){
-   for(let y=Math.round(h*.12);y<=Math.round(h*.58);y+=Math.max(8,Math.round(h*.07))){
-     const pos=sevenDetectPositions(g,w,h,y,dh,Math.max(24,Math.round(w*.075)));
-     if(pos.length!==4&&pos.length!==3)continue;
-     const cls=pos.map(p=>sevenClassify(sevenZones(g,w,h,p.x,y,p.w,dh)));
-     if(cls.some(c=>c.char==="?"))continue;
-     const avg=cls.reduce((a,c)=>a+c.score,0)/cls.length;
-     
-     // Weight display expected form is DD.D: decimal between second and third digit.
-     const reading=cls[0].char+cls[1].char+"."+cls[2].char;
-     const num=Number(reading);
-     if(Number.isFinite(num)&&num>=20&&num<=300)candidates.push({reading,num,score:avg});
-   }
- }
- if(!candidates.length)return null;
- candidates.sort((a,b)=>b.score-a.score);
- return candidates[0];
-}
-
 async function recognizeWeightSevenSegment(dataUrl){
- const img=await new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=dataUrl});
- // Multiple display-centered ROIs prevent printed scale specifications from competing.
- const boxes=[
-   [.10,.10,.80,.70],
-   [.16,.16,.68,.58],
-   [.20,.22,.60,.48],
-   [.05,.18,.90,.62]
- ];
- const readings=[];
+ const img=await sevenLoadImage(dataUrl);
+ const boxes=[[.08,.08,.84,.76],[.12,.14,.76,.64],[.16,.18,.68,.56],[.20,.22,.60,.48],[.05,.22,.90,.54]];
+ const reads=[];
  for(let i=0;i<boxes.length;i++){
-   $("scanStatus").textContent="🔎 7-segment ეკრანს ვამოწმებ... "+(i+1)+"/"+boxes.length;
-   const r=sevenReadROI(sevenMakeROI(img,boxes[i]));
-   if(r)readings.push(r);
+  $("scanStatus").textContent="🔎 7-segment reader — ეკრანს ვამოწმებ "+(i+1)+"/"+boxes.length+"...";
+  const r=sevenTryROI(sevenMakeROI(img,boxes[i]));if(r)reads.push(r);
  }
- if(!readings.length)return null;
- const groups={};
- for(const r of readings){
-   if(!groups[r.reading])groups[r.reading]={...r,count:0};
-   groups[r.reading].count++;
-   groups[r.reading].score+=r.score;
- }
- const ranked=Object.values(groups).sort((a,b)=>b.count-a.count||(b.score/a.count)-(a.score/b.count));
- const best=ranked[0];
- // Never accept a lone weak guess. At least two ROI/band readings must agree.
- if(!best||best.count<2||best.score/best.count<.35)return null;
- return {raw:best.reading,number:best.num};
+ if(!reads.length)return null;
+ const byValue=new Map();
+ for(const r of reads){const old=byValue.get(r.raw);if(old)old.count++;else byValue.set(r.raw,{...r,count:1})}
+ const ranked=[...byValue.values()].sort((a,b)=>b.count-a.count||b.confidence-a.confidence),best=ranked[0];
+ if(!best||best.count<2||best.confidence<.72)return null;
+ const raw=best.raw.length>=3?best.raw.slice(0,-1)+"."+best.raw.slice(-1):best.raw,number=Number(raw);
+ if(!Number.isFinite(number)||number<=0||number>500)return null;
+ return {raw,number};
 }
-
 async function scanScalePhoto(file){
  try{
   const dataUrl=await fileToDataUrl(file);
   $("scanStatus").textContent="🔎 სპეციალური 7-segment reader მუშაობს...";
   const found=await recognizeWeightSevenSegment(dataUrl);
-  if(!found){
-    $("scanStatus").textContent="❌ წონა ვერ დადასტურდა — თავიდან გადაიღე.";
-    recognizedScanWeight=null;
-    return;
-  }
-  recognizedScanWeight=found.number;
-  $("weightInput").value=found.raw;
-  $("scanStatus").textContent="✅ 7-segment-ით დადასტურებულია: "+found.raw+" კგ";
-  $("saveBtn").click();
-}catch(e){
-  console.warn("seven-segment reader",e);
-  recognizedScanWeight=null;
-  $("scanStatus").textContent="❌ წონის წაკითხვა ვერ მოხერხდა.";
- }
+  if(!found){$("scanStatus").textContent="❌ წონა ვერ დადასტურდა — თავიდან გადაიღე.";recognizedScanWeight=null;return}
+  recognizedScanWeight=found.number;$("weightInput").value=found.raw;
+  $("scanStatus").textContent="✅ 7-segment-ით დადასტურებულია: "+found.raw+" კგ";$("saveBtn").click();
+ }catch(e){console.warn("seven-segment reader",e);recognizedScanWeight=null;$("scanStatus").textContent="❌ წონის წაკითხვა ვერ მოხერხდა."}
 }
 
 let cameraStream=null,cameraTrack=null;
