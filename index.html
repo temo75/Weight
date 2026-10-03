@@ -216,20 +216,57 @@ function sevenSmooth(a,r=2){
  return o;
 }
 function sevenBestBand(b,w,h){
- const rows=new Float32Array(h);
- for(let y=0;y<h;y++){let s=0;for(let x=0;x<w;x++)s+=b[y*w+x];rows[y]=s/w}
- const sm=sevenSmooth(rows,Math.max(2,Math.round(h*.015)));
- let best=null,minH=Math.max(18,Math.round(h*.16)),maxH=Math.min(Math.round(h*.72),h-4);
- for(let y=0;y<h-minH;y+=3){
-  for(const hh of [minH,Math.round((minH+maxH)/2),maxH]){
-   if(y+hh>h)continue;let s=0;
-   for(let yy=y;yy<y+hh;yy++)s+=sm[yy];
-   const density=s/hh,score=density-Math.abs(density-.20)*.18;
+ // Prefer the actual LCD/display rectangle rather than the densest arbitrary band.
+ // This is important for scale photos where the floor/body is much larger than the digits.
+ const row=new Float32Array(h), col=new Float32Array(w);
+ for(let y=0;y<h;y++){let s=0;for(let x=0;x<w;x++)s+=b[y*w+x];row[y]=s/w}
+ for(let x=0;x<w;x++){let s=0;for(let y=0;y<h;y++)s+=b[y*w+x];col[x]=s/h}
+ const rs=sevenSmooth(row,Math.max(2,Math.round(h*.012)));
+ let best=null;
+ const minH=Math.max(25,Math.round(h*.08)), maxH=Math.min(Math.round(h*.38),Math.round(h*.8));
+ for(let hh=minH;hh<=maxH;hh=Math.max(hh+8,Math.round(hh*1.18))){
+  for(let y=0;y+hh<h;y+=Math.max(2,Math.round(h*.018))){
+   let edge=0,inside=0,outside=0;
+   for(let yy=y;yy<y+hh;yy++)inside+=rs[yy];
+   const mid=inside/hh;
+   for(let yy=Math.max(0,y-Math.round(hh*.18));yy<y;yy++)outside+=rs[yy];
+   for(let yy=y+hh;yy<Math.min(h,y+hh+Math.round(hh*.18));yy++)outside+=rs[yy];
+   outside/=Math.max(1,Math.min(h,y)-Math.max(0,y-Math.round(hh*.18))+
+                         Math.min(h,y+hh+Math.round(hh*.18))-(y+hh));
+   edge=Math.abs(mid-outside);
+   const score=edge + Math.min(.20,Math.abs(mid-.22)*.10);
    if(!best||score>best.score)best={y,h:hh,score};
   }
  }
  return best;
 }
+
+function sevenFindDisplayROI(b,w,h){
+ // Build a coarse luminance/threshold map and search for the rectangular LCD zone.
+ // Several aspect ratios are tried because the two photographed scales use different crops.
+ const ratios=[1.7,2.0,2.4,2.8,3.2,3.8];
+ let best=null;
+ for(const ratio of ratios){
+  const dh=Math.max(35,Math.round(h*.16));
+  const dw=Math.min(w-10,Math.round(dh*ratio));
+  for(let y=Math.round(h*.15);y<=Math.round(h*.72);y+=Math.max(4,Math.round(h*.025))){
+   if(y+dh>=h)continue;
+   for(let x=Math.round(w*.08);x<=Math.round(w*.82);x+=Math.max(5,Math.round(w*.035))){
+    if(x+dw>=w)continue;
+    let sum=0,sq=0,n=0;
+    for(let yy=y;yy<y+dh;yy+=2)for(let xx=x;xx<x+dw;xx+=2){
+      const v=b[yy*w+xx];sum+=v;sq+=v*v;n++;
+    }
+    const mean=sum/n,variance=Math.max(0,sq/n-mean*mean);
+    // LCD areas tend to be a coherent rectangle with moderate density and texture.
+    const score=.22-Math.abs(mean-.38)+Math.min(.12,Math.sqrt(variance)*.18);
+    if(!best||score>best.score)best={x,y,w:dw,h:dh,score};
+   }
+  }
+ }
+ return best;
+}
+
 function sevenColumnGroups(b,w,h,y,hh){
  const col=new Float32Array(w);
  for(let x=0;x<w;x++){let s=0;for(let yy=y;yy<y+hh;yy++)s+=b[yy*w+x];col[x]=s/hh}
