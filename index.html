@@ -423,36 +423,42 @@ function scaleOCRImage(dataUrl){
 }
 
 function scaleOCRCandidates(data){
- const words=(data?.words||[]).map(w=>({
-  text:String(w.text||"").replace(/,/g,".").trim(),
-  confidence:Number(w.confidence||0),
-  box:w.bbox||null
- })).filter(w=>/^\d{1,3}(?:\.\d{1,2})?$/.test(w.text));
-
  const out=[];
- for(const w of words){
-  const n=Number(w.text);
-  if(!Number.isFinite(n)||n<=1||n>300)continue;
-  const box=w.box||{};
-  const area=Math.max(1,(box.x1-box.x0)*(box.y1-box.y0));
-  out.push({raw:w.text,number:n,confidence:w.confidence,area});
+ const tsv=String(data?.tsv||"");
+ if(tsv){
+  const lines=tsv.split(/\r?\n/);
+  for(const line of lines){
+   const p=line.split("\t");
+   if(p.length<12)continue;
+   const text=String(p[11]||"").trim().replace(/,/g,".");
+   if(!/^\d{1,3}(?:\.\d{1,2})?$/.test(text))continue;
+   const conf=Number(p[10]);
+   const x0=Number(p[6]),y0=Number(p[7]),x1=x0+Number(p[8]),y1=y0+Number(p[9]);
+   const n=Number(text);
+   if(!Number.isFinite(n)||n<=1||n>300||!Number.isFinite(conf))continue;
+   out.push({raw:text,number:n,confidence:conf,area:Math.max(1,(x1-x0)*(y1-y0)),x0,y0,x1,y1});
+  }
  }
  return out;
 }
-
 async function recognizeWeightSevenSegment(dataUrl){
  const worker=await loadScaleOCR();
+ $("scanStatus").textContent="🔎 OCR ფოტოზე დიდ რიცხვს ეძებს...";
  const image=await scaleOCRImage(dataUrl);
- const r=await worker.recognize(image);
+ const r=await worker.recognize(image,{}, {text:true,tsv:true});
  let candidates=scaleOCRCandidates(r?.data);
  if(!candidates.length){
-  const r2=await worker.recognize(dataUrl);
+  const r2=await worker.recognize(dataUrl,{}, {text:true,tsv:true});
   candidates=scaleOCRCandidates(r2?.data);
  }
  if(!candidates.length)return null;
 
- // აიღე ფოტოზე ყველაზე დიდი ამოცნობილი რიცხვი.
- candidates.sort((a,b)=>(b.area*b.confidence)-(a.area*a.confidence));
+ // Prefer the largest, high-confidence numeric text on the photo.
+ candidates.sort((a,b)=>{
+  const sa=a.area*Math.max(1,a.confidence/70);
+  const sb=b.area*Math.max(1,b.confidence/70);
+  return sb-sa;
+ });
  return candidates[0];
 }
 
