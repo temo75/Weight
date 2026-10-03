@@ -695,7 +695,7 @@ function captureCurrentCameraFrame(manual=false){
       $("scanImage").removeAttribute("src");
       $("scanPreview").style.display="none";
       // Do not clear scanStatus here: OCR may still be processing.
-    },5000);
+    },10000);
   }
 
   cv.toBlob(blob=>{
