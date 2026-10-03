@@ -449,19 +449,8 @@ function captureCurrentCameraFrame(manual=false){
 
 function startAutoScaleReader(){
   clearInterval(autoScanTimer);
+  autoScanTimer=null;
   autoScanBusy=false;
-
-  // Give the camera a moment to produce its first full-resolution frame.
-  setTimeout(()=>{
-    if(!cameraStream)return;
-
-    captureCurrentCameraFrame();
-
-    // Keep sampling until one reading is independently confirmed.
-    autoScanTimer=setInterval(()=>{
-      if(cameraStream&&!autoScanBusy)captureCurrentCameraFrame();
-    },1400);
-  },900);
 }
 
 async function openCamera(){
