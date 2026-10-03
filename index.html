@@ -158,6 +158,67 @@ function render(){
 }
 let ocrLoadPromise=null;
 
+let numericOCRWorker=null;
+let numericOCRPromise=null;
+
+async function loadNumericOCR(){
+  if(numericOCRWorker)return numericOCRWorker;
+  if(numericOCRPromise)return numericOCRPromise;
+
+  numericOCRPromise=(async()=>{
+    if(!window.Tesseract){
+      await new Promise((resolve,reject)=>{
+        const s=document.createElement("script");
+        s.src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+        s.onload=resolve;s.onerror=reject;
+        document.head.appendChild(s);
+      });
+    }
+
+    const worker=await Tesseract.createWorker("eng",1,{
+      langPath:"https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int",
+      gzip:true,
+      legacyCore:false,
+      legacyLang:false
+    });
+
+    await worker.setParameters({
+      tessedit_char_whitelist:"0123456789.,",
+      tessedit_pageseg_mode:"7",
+      preserve_interword_spaces:"0"
+    });
+
+    numericOCRWorker=worker;
+    return worker;
+  })().catch(e=>{
+    numericOCRPromise=null;
+    numericOCRWorker=null;
+    throw e;
+  });
+
+  return numericOCRPromise;
+}
+
+function makeNumericOCRImage(img){
+  const W=img.naturalWidth,H=img.naturalHeight;
+  const cv=document.createElement("canvas");
+  cv.width=Math.max(1400,Math.round(W*2));
+  cv.height=Math.max(600,Math.round(H*2));
+  const g=cv.getContext("2d",{willReadFrequently:true});
+  g.imageSmoothingEnabled=true;
+  g.drawImage(img,0,0,cv.width,cv.height);
+
+  const im=g.getImageData(0,0,cv.width,cv.height);
+  const d=im.data;
+  for(let i=0;i<d.length;i+=4){
+    const v=Math.round(.299*d[i]+.587*d[i+1]+.114*d[i+2]);
+    const q=v<175?35:255;
+    d[i]=d[i+1]=d[i+2]=q;
+  }
+  g.putImageData(im,0,0);
+  return cv;
+}
+
 async function loadOCR(){
   if(ocrWorker)return ocrWorker;
   if(ocrLoadPromise)return ocrLoadPromise;
@@ -395,62 +456,86 @@ async function scanScalePhoto(file,manual=false){
   let url=null;
   try{
     const img=await new Promise((resolve,reject)=>{
-      const im=new Image(); im.onload=()=>resolve(im); im.onerror=reject;
-      url=URL.createObjectURL(file); im.src=im;
+      const im=new Image();
+      im.onload=()=>resolve(im);
+      im.onerror=reject;
+      url=URL.createObjectURL(file);
+      im.src=url;
     });
     if(url){URL.revokeObjectURL(url);url=null}
 
     let found=null;
+    const candidates=[];
 
-    // Manual capture: OCR first. The direct segment reader can sometimes
-    // invent an extra digit on a perspective/blurred photo.
     if(manual){
+      // 1) Specialized seven-segment OCR for real digital scales.
       try{
         const worker=await loadOCR();
         const crops=makeSevenSegmentOCRImages(img);
-        const candidates=[];
 
         try{
-          const original=await worker.recognize(img);
-          const n=parseSevenOCR(original?.data?.text||"");
-          if(Number.isFinite(n)) candidates.push(n);
+          const result=await worker.recognize(crops[0]?.image||img);
+          const n=parseSevenOCR(result?.data?.text||"");
+          if(Number.isFinite(n))candidates.push({n,source:"7seg"});
         }catch(_){}
 
-        for(const item of crops.slice(0,2)){
-          try{
-            const result=await worker.recognize(item.image);
-            const n=parseSevenOCR(result?.data?.text||"");
-            if(Number.isFinite(n)) candidates.push(n);
-          }catch(_){}
-        }
+        try{
+          const result=await worker.recognize(crops[1]?.image||img);
+          const n=parseSevenOCR(result?.data?.text||"");
+          if(Number.isFinite(n))candidates.push({n,source:"7seg"});
+        }catch(_){}
+      }catch(e){
+        console.warn("7-segment OCR unavailable",e);
+      }
 
-        if(candidates.length){
-          const counts=new Map();
-          for(const n of candidates){
-            const k=n.toFixed(2);
-            counts.set(k,(counts.get(k)||0)+1);
-          }
-          const best=[...counts.entries()].sort((a,b)=>b[1]-a[1])[0];
-          const second=[...counts.entries()].sort((a,b)=>b[1]-a[1])[1];
-          // Prefer a repeated OCR result. If only one result exists,
-          // accept it only when it is a normal scale value.
-          if(best && (best[1]>=2 || !second)){
-            found={number:Number(best[0]),raw:best[0],quality:.80,agreement:best[1]};
-          }
+      // 2) Normal numeric OCR fallback. This also handles non-LCD test images.
+      try{
+        const worker=await loadNumericOCR();
+        const numeric=makeNumericOCRImage(img);
+        const result=await worker.recognize(numeric);
+        const text=String(result?.data?.text||"")
+          .replace(/,/g,".")
+          .replace(/[^0-9.]/g,"")
+          .replace(/\.{2,}/g,".");
+
+        const matches=text.match(/\d{2,3}(?:\.\d{1,2})?/g)||[];
+        for(const s of matches){
+          const n=Number(s);
+          if(Number.isFinite(n)&&n>=30&&n<=250)
+            candidates.push({n,source:"numeric"});
         }
       }catch(e){
-        console.warn("manual OCR",e);
+        console.warn("numeric OCR fallback",e);
+      }
+
+      // Prefer a repeated exact value; otherwise prefer numeric OCR.
+      if(candidates.length){
+        const counts=new Map();
+        for(const x of candidates){
+          const k=x.n.toFixed(2);
+          const old=counts.get(k)||{count:0,n:x.n,source:x.source};
+          old.count++;
+          if(x.source==="numeric")old.source="numeric";
+          counts.set(k,old);
+        }
+        const ordered=[...counts.values()].sort((a,b)=>{
+          if(b.count!==a.count)return b.count-a.count;
+          if(a.source!==b.source)return a.source==="numeric"?-1:1;
+          return 0;
+        });
+        const best=ordered[0];
+        if(best)found={number:best.n,raw:best.n.toFixed(2),quality:.80,agreement:best.count};
       }
     }
 
-    // Direct seven-segment reader is only the fallback.
+    // 3) Final local seven-segment reader, only as a last fallback.
     if(!found){
       const direct=readScaleDisplayDirect(img);
-      if(direct && direct.quality>=.35 && direct.agreement>=2) found=direct;
+      if(direct&&direct.quality>=.35&&direct.agreement>=2)found=direct;
     }
 
-    if(!found || !Number.isFinite(found.number)){
-      $("scanStatus").textContent="❌ ფოტოდან წონა ვერ ამოვიცანი — გადაიღე ციფრები ჩარჩოს ცენტრში.";
+    if(!found||!Number.isFinite(found.number)){
+      $("scanStatus").textContent="❌ ფოტოდან წონა ვერ ამოვიცანი — ციფრები ჩარჩოს ცენტრში მოაქციე.";
       return;
     }
 
