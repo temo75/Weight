@@ -7,7 +7,7 @@
 </defs>
 <rect width="512" height="512" rx="92" fill="url(#bg)"/>
 <rect x="8" y="8" width="496" height="496" rx="86" fill="none" stroke="#35eaff" stroke-width="7" filter="url(#glow)"/>
-<g fill="url(#gold)" stroke="#b97800" stroke-width="4" stroke-linejoin="round" filter="url(#shadow)">
+<g transform="translate(64 16) scale(.75)" fill="url(#gold)" stroke="#b97800" stroke-width="4" stroke-linejoin="round" filter="url(#shadow)">
  <circle cx="256" cy="82" r="23"/>
  <rect x="246" y="98" width="20" height="150" rx="10"/>
  <path d="M256 108 C208 108 164 112 119 102 C108 100 101 107 104 118 C108 132 124 137 139 135 C181 130 218 126 256 126 C294 126 331 130 373 135 C388 137 404 132 408 118 C411 107 404 100 393 102 C348 112 304 108 256 108Z"/>
