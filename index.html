@@ -392,23 +392,67 @@ function makeTightSevenSegmentCrops(img){
 async function scanScalePhoto(file,manual=false){
   let url=null;
   try{
-    const img=await new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;url=URL.createObjectURL(file);im.src=url});
+    const img=await new Promise((resolve,reject)=>{
+      const im=new Image();
+      im.onload=()=>resolve(im);
+      im.onerror=reject;
+      url=URL.createObjectURL(file);
+      im.src=url;
+    });
     if(url){URL.revokeObjectURL(url);url=null}
-    if(!cameraStream)return;
-    const found=readScaleDisplayDirect(img);
-    if(!found||found.quality<.30){lastScaleCandidate=null;$("scanStatus").textContent="🔎 LCD ვერ დავადასტურე — კამერა აგრძელებს ძებნას...";return}
-    const key=found.number.toFixed(2);
-    if(!manual){
-      if(lastScaleCandidate&&lastScaleCandidate.key===key)lastScaleCandidate.count++;
-      else lastScaleCandidate={key,count:1};
-      if(lastScaleCandidate.count<2){$("scanStatus").textContent="🔎 ვამოწმებ წაკითხვას: "+found.raw+"...";return}
+
+    // Manual capture = one frame only. No background searching.
+    let found=readScaleDisplayDirect(img);
+
+    // If the seven-segment reader misses it, use the existing OCR as a fallback.
+    if((!found||found.quality<.30) && manual){
+      try{
+        const worker=await loadOCR();
+        const crops=makeSevenSegmentOCRImages(img);
+        for(const item of crops){
+          try{
+            const result=await worker.recognize(item.image);
+            const n=parseSevenOCR(result?.data?.text||"");
+            if(Number.isFinite(n)){
+              found={number:n,raw:String(n),quality:.40,agreement:1};
+              break;
+            }
+          }catch(_){}
+        }
+      }catch(e){
+        console.warn("manual OCR fallback",e);
+      }
     }
-    const weight=Number(key);recognizedScanWeight=weight;$("weightInput").value=String(weight);
-    $("scanStatus").textContent="✅ დადასტურებულია: "+found.raw+" კგ — ვინახავ...";
+
+    if(!found||!Number.isFinite(found.number)){
+      $("scanStatus").textContent="❌ ამ ფოტოზე წონის ციფრი ვერ ამოვიცანი.";
+      return;
+    }
+
+    const weight=Number(found.number);
+    if(weight<1||weight>300){
+      $("scanStatus").textContent="❌ ამოცნობილი წონა არასწორია.";
+      return;
+    }
+
+    recognizedScanWeight=weight;
+    $("weightInput").value=String(weight);
+    $("scanStatus").textContent="✅ დაფიქსირდა: "+(found.raw||weight)+" კგ — ვინახავ...";
+
+    // Save immediately, then turn the camera off immediately.
     $("saveBtn").click();
-    $("scanImage").removeAttribute("src");$("scanPreview").style.display="none";$("scanResult").style.display="none";closeCamera();
-  }catch(e){if(url)URL.revokeObjectURL(url);console.warn("scale frame",e);if(cameraStream)$("scanStatus").textContent="🔎 კადრი ვერ დამუშავდა — კამერა აგრძელებს ძებნას..."}
+    closeCamera();
+
+    $("scanImage").removeAttribute("src");
+    $("scanPreview").style.display="none";
+    $("scanResult").style.display="none";
+  }catch(e){
+    if(url)URL.revokeObjectURL(url);
+    console.warn("scale frame",e);
+    $("scanStatus").textContent="❌ ფოტოს დამუშავება ვერ მოხერხდა.";
+  }
 }
+
 let cameraStream=null,cameraTrack=null,lastScaleCandidate=null;
 let autoScanTimer=null,autoScanBusy=false;
 
