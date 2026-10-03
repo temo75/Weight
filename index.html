@@ -47,7 +47,7 @@
     <div class="zoom-row"><span>🔍</span><input id="zoomControl" type="range" min="1" max="1" step="0.1" value="1"><span id="zoomValue">1×</span></div>
     <div class="camera-actions">
       <button class="btn camera-close" id="closeCameraBtn">✕ დახურვა</button>
-      <button class="btn" id="captureCameraBtn" style="display:none">📸 ავტომატური ამოცნობა</button>
+      <button class="btn" id="captureCameraBtn">📸 დაფიქსირება</button>
     </div>
   </div>
 </div>
@@ -526,9 +526,8 @@ $("zoomControl").oninput=async e=>{
     try{await cameraTrack.applyConstraints({advanced:[{zoom:z}]})}catch(_){}
 };
 
-// Manual button is kept in the DOM for compatibility, but the camera now
-// captures frames automatically; the user does not need to press it.
-$("captureCameraBtn").onclick=()=>captureCurrentCameraFrame();
+// Manual capture button: the user can press it to request an immediate reading.
+$("captureCameraBtn").onclick=()=>{\n  lastScaleCandidate=null;\n  $("scanStatus").textContent="📸 კადრს ვაფიქსირებ...";\n  captureCurrentCameraFrame();\n};
 
 $("scalePhoto").onchange=e=>{const file=e.target.files?.[0];if(file)scanScalePhoto(file);e.target.value=""};
 
