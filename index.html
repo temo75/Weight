@@ -401,7 +401,7 @@ function parseWeightOCR(text){
 }
 async function recognizeWeightOCR(canvas){
  const ocr=await loadWeightOCR();$("scanStatus").textContent="🔎 ჩარჩოში მოცემულ რიცხვს ვკითხულობ...";
- const result=await ocr(canvas,{max_new_tokens:24}),text=Array.isArray(result)?result.map(x=>x.generated_text||"").join(" "):String(result?.generated_text||"");
+ const imageData=canvas.toDataURL("image/jpeg",.95); const result=await ocr(imageData,{max_new_tokens:24}),text=Array.isArray(result)?result.map(x=>x.generated_text||"").join(" "):String(result?.generated_text||"");
  return parseWeightOCR(text);
 }
 let cameraStream=null,cameraTrack=null;
